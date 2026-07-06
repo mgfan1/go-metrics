@@ -1,11 +1,16 @@
 package main
 
 import (
-	"time"
+	"log"
 
 	"github.com/mgfan1/go-metrics/internal/agent"
 )
 
 func main() {
-	agent.New("localhost:8080", 2*time.Second, 10*time.Second).Run()
+	cfg := parseFlags()
+
+	log.Printf("агент: сервер %s, опрос %s, отправка %s",
+		cfg.addr, cfg.pollInterval, cfg.reportInterval)
+
+	agent.New(cfg.addr, cfg.pollInterval, cfg.reportInterval).Run()
 }

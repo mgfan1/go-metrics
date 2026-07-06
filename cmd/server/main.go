@@ -15,8 +15,11 @@ func main() {
 }
 
 func run() error {
+	cfg := parseFlags()
+
 	store := storage.NewMemStorage()
 	h := handler.New(store)
 
-	return http.ListenAndServe(":8080", h.Router())
+	log.Printf("сервер метрик слушает %s", cfg.addr)
+	return http.ListenAndServe(cfg.addr, h.Router())
 }
