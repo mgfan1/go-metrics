@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -56,4 +57,43 @@ func TestUpdateStatuses(t *testing.T) {
 			assert.Equal(t, c.want, code)
 		})
 	}
+}
+
+func TestUpdateThenRead(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.Close()
+
+	post := func(path string) {
+		code, _ := do(t, ts, http.MethodPost, path)
+		require.Equal(t, http.StatusOK, code, path)
+	}
+
+	post("/update/gauge/Alloc/100.5")
+	post("/update/gauge/Alloc/42.1")
+	post("/update/counter/PollCount/5")
+	post("/update/counter/PollCount/3")
+
+	code, body := do(t, ts, http.MethodGet, "/value/gauge/Alloc")
+	assert.Equal(t, http.StatusOK, code)
+	assert.Equal(t, "42.1", body)
+
+	code, body = do(t, ts, http.MethodGet, "/value/counter/PollCount")
+	assert.Equal(t, http.StatusOK, code)
+	assert.Equal(t, "8", body)
+
+	code, _ = do(t, ts, http.MethodGet, "/value/gauge/Unknown")
+	assert.Equal(t, http.StatusNotFound, code)
+}
+
+func TestListPage(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.Close()
+
+	do(t, ts, http.MethodPost, "/update/gauge/Alloc/1")
+	do(t, ts, http.MethodPost, "/update/counter/PollCount/7")
+
+	code, body := do(t, ts, http.MethodGet, "/")
+	assert.Equal(t, http.StatusOK, code)
+	assert.True(t, strings.Contains(body, "Alloc"), "на странице нет Alloc")
+	assert.True(t, strings.Contains(body, "PollCount"), "на странице нет PollCount")
 }
