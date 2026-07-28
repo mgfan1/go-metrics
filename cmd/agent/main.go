@@ -8,7 +8,16 @@ import (
 )
 
 func main() {
-	cfg := parseFlags()
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run() error {
+	cfg, err := parseFlags()
+	if err != nil {
+		return err
+	}
 
 	poll := time.Duration(cfg.pollInterval) * time.Second
 	report := time.Duration(cfg.reportInterval) * time.Second
@@ -16,4 +25,5 @@ func main() {
 	log.Printf("агент: сервер %s, опрос %s, отправка %s", cfg.addr, poll, report)
 
 	agent.New(cfg.addr, poll, report).Run()
+	return nil
 }
