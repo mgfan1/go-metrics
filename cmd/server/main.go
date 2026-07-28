@@ -4,7 +4,10 @@ import (
 	"log"
 	"net/http"
 
+	"go.uber.org/zap"
+
 	"github.com/mgfan1/go-metrics/internal/handler"
+	"github.com/mgfan1/go-metrics/internal/logger"
 	"github.com/mgfan1/go-metrics/internal/storage"
 )
 
@@ -17,9 +20,15 @@ func main() {
 func run() error {
 	cfg := parseFlags()
 
+	if err := logger.Initialize(); err != nil {
+		return err
+	}
+	defer func() { _ = logger.Log.Sync() }()
+
 	store := storage.NewMemStorage()
 	h := handler.New(store)
 
-	log.Printf("сервер метрик слушает %s", cfg.addr)
+	logger.Log.Info("сервер метрик запущен", zap.String("addr", cfg.addr))
+
 	return http.ListenAndServe(cfg.addr, h.Router())
 }
