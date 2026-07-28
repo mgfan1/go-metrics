@@ -12,8 +12,16 @@ func (h *MetricsHandler) Router() chi.Router {
 	r.Use(middleware.Logging)
 
 	r.Get("/", h.List)
-	r.Post("/update/{type}/{name}/{value}", h.Update)
-	r.Get("/value/{type}/{name}", h.Value)
+
+	r.Route("/update", func(r chi.Router) {
+		r.Post("/", h.UpdateJSON)
+		r.Post("/{type}/{name}/{value}", h.Update)
+	})
+
+	r.Route("/value", func(r chi.Router) {
+		r.Post("/", h.ValueJSON)
+		r.Get("/{type}/{name}", h.Value)
+	})
 
 	return r
 }
