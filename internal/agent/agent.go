@@ -2,6 +2,7 @@ package agent
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -106,11 +107,21 @@ func (a *Agent) send(m models.Metrics) error {
 		return err
 	}
 
-	req, err := http.NewRequest(http.MethodPost, a.baseURL+"/update/", bytes.NewReader(body))
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	if _, err := gz.Write(body); err != nil {
+		return err
+	}
+	if err := gz.Close(); err != nil {
+		return err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, a.baseURL+"/update/", &buf)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Encoding", "gzip")
 
 	resp, err := a.client.Do(req)
 	if err != nil {

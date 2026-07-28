@@ -10,6 +10,7 @@ func (h *MetricsHandler) Router() chi.Router {
 	r := chi.NewRouter()
 
 	r.Use(middleware.Logging)
+	r.Use(middleware.Gzip)
 
 	r.Get("/", h.List)
 

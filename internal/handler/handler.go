@@ -54,6 +54,7 @@ func (h *MetricsHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 func (h *MetricsHandler) Value(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 
 	switch chi.URLParam(r, "type") {
 	case models.Gauge:

@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -48,8 +50,15 @@ func newCollector() (*httptest.Server, func() []captured) {
 func unpack(t *testing.T, raw []byte) models.Metrics {
 	t.Helper()
 
+	zr, err := gzip.NewReader(bytes.NewReader(raw))
+	require.NoError(t, err)
+
+	body, err := io.ReadAll(zr)
+	require.NoError(t, err, "gzip-поток оборван")
+	require.NoError(t, zr.Close())
+
 	var m models.Metrics
-	require.NoError(t, json.Unmarshal(raw, &m))
+	require.NoError(t, json.Unmarshal(body, &m))
 	return m
 }
 
@@ -101,6 +110,29 @@ func TestReport(t *testing.T) {
 	assert.Nil(t, poll.Value)
 }
 
+func TestReportSendsGzip(t *testing.T) {
+	srv, dump := newCollector()
+	defer srv.Close()
+
+	a := New(strings.TrimPrefix(srv.URL, "http://"), time.Second, time.Second)
+	a.poll()
+	a.report()
+
+	got := dump()
+	require.NotEmpty(t, got)
+
+	for _, c := range got {
+		assert.Equal(t, "application/json", c.headers.Get("Content-Type"))
+		assert.Equal(t, "gzip", c.headers.Get("Content-Encoding"))
+
+		require.GreaterOrEqual(t, len(c.raw), 2)
+		assert.Equal(t, []byte{0x1f, 0x8b}, c.raw[:2], "тело не сжато gzip")
+
+		m := unpack(t, c.raw)
+		assert.NotEmpty(t, m.ID)
+	}
+}
+
 func TestSendMetricPayload(t *testing.T) {
 	value := 42.5
 	delta := int64(7)
@@ -126,8 +158,13 @@ func TestSendMetricPayload(t *testing.T) {
 			got := dump()
 			require.Len(t, got, 1)
 
+			zr, err := gzip.NewReader(bytes.NewReader(got[0].raw))
+			require.NoError(t, err)
+			body, err := io.ReadAll(zr)
+			require.NoError(t, err)
+
 			var fields map[string]any
-			require.NoError(t, json.Unmarshal(got[0].raw, &fields))
+			require.NoError(t, json.Unmarshal(body, &fields))
 
 			assert.Contains(t, fields, c.present)
 			assert.NotContains(t, fields, c.absent)
