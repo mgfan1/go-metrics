@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
+	"go.uber.org/zap"
 
 	models "github.com/mgfan1/go-metrics/internal/model"
 	"github.com/mgfan1/go-metrics/internal/storage"
@@ -14,10 +15,11 @@ import (
 
 type MetricsHandler struct {
 	store storage.Repository
+	log   *zap.Logger
 }
 
-func New(store storage.Repository) *MetricsHandler {
-	return &MetricsHandler{store: store}
+func New(store storage.Repository, log *zap.Logger) *MetricsHandler {
+	return &MetricsHandler{store: store, log: log}
 }
 
 func (h *MetricsHandler) Update(w http.ResponseWriter, r *http.Request) {

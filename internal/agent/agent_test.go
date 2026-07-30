@@ -14,6 +14,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 
 	"github.com/mgfan1/go-metrics/internal/handler"
 	models "github.com/mgfan1/go-metrics/internal/model"
@@ -63,7 +64,7 @@ func unpack(t *testing.T, raw []byte) models.Metrics {
 }
 
 func TestPoll(t *testing.T) {
-	a := New("localhost:8080", time.Second, time.Second)
+	a := New("localhost:8080", time.Second, time.Second, zap.NewNop())
 	a.poll()
 	a.poll()
 
@@ -82,7 +83,7 @@ func TestReport(t *testing.T) {
 	srv, dump := newCollector()
 	defer srv.Close()
 
-	a := New(strings.TrimPrefix(srv.URL, "http://"), time.Second, time.Second)
+	a := New(strings.TrimPrefix(srv.URL, "http://"), time.Second, time.Second, zap.NewNop())
 	a.poll()
 	a.report()
 
@@ -114,7 +115,7 @@ func TestReportSendsGzip(t *testing.T) {
 	srv, dump := newCollector()
 	defer srv.Close()
 
-	a := New(strings.TrimPrefix(srv.URL, "http://"), time.Second, time.Second)
+	a := New(strings.TrimPrefix(srv.URL, "http://"), time.Second, time.Second, zap.NewNop())
 	a.poll()
 	a.report()
 
@@ -152,7 +153,7 @@ func TestSendMetricPayload(t *testing.T) {
 			srv, dump := newCollector()
 			defer srv.Close()
 
-			a := New(strings.TrimPrefix(srv.URL, "http://"), time.Second, time.Second)
+			a := New(strings.TrimPrefix(srv.URL, "http://"), time.Second, time.Second, zap.NewNop())
 			a.send(c.metric)
 
 			got := dump()
@@ -178,7 +179,7 @@ func TestReportResetsPollCount(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := New(strings.TrimPrefix(srv.URL, "http://"), time.Second, time.Second)
+	a := New(strings.TrimPrefix(srv.URL, "http://"), time.Second, time.Second, zap.NewNop())
 	a.poll()
 	a.poll()
 	a.report()
@@ -193,7 +194,7 @@ func TestReportKeepsPollCountOnFailure(t *testing.T) {
 	addr := strings.TrimPrefix(srv.URL, "http://")
 	srv.Close()
 
-	a := New(addr, time.Second, time.Second)
+	a := New(addr, time.Second, time.Second, zap.NewNop())
 	a.poll()
 	a.poll()
 	a.report()
@@ -208,7 +209,7 @@ func TestSendReturnsErrorOnBadStatus(t *testing.T) {
 	defer srv.Close()
 
 	value := 1.0
-	a := New(strings.TrimPrefix(srv.URL, "http://"), time.Second, time.Second)
+	a := New(strings.TrimPrefix(srv.URL, "http://"), time.Second, time.Second, zap.NewNop())
 
 	err := a.send(models.Metrics{ID: "Alloc", MType: models.Gauge, Value: &value})
 	require.Error(t, err)
@@ -217,10 +218,10 @@ func TestSendReturnsErrorOnBadStatus(t *testing.T) {
 
 func TestAgentSendsToRealServer(t *testing.T) {
 	store := storage.NewMemStorage()
-	srv := httptest.NewServer(handler.New(store).Router())
+	srv := httptest.NewServer(handler.New(store, zap.NewNop()).Router(zap.NewNop()))
 	defer srv.Close()
 
-	a := New(strings.TrimPrefix(srv.URL, "http://"), time.Second, time.Second)
+	a := New(strings.TrimPrefix(srv.URL, "http://"), time.Second, time.Second, zap.NewNop())
 	a.poll()
 	a.report()
 

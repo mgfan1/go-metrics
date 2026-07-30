@@ -9,14 +9,15 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 
 	"github.com/mgfan1/go-metrics/internal/storage"
 )
 
 func newTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
-	h := New(storage.NewMemStorage())
-	return httptest.NewServer(h.Router())
+	h := New(storage.NewMemStorage(), zap.NewNop())
+	return httptest.NewServer(h.Router(zap.NewNop()))
 }
 
 func do(t *testing.T, ts *httptest.Server, method, path string) (int, string) {

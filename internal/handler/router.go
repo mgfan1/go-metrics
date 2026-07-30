@@ -2,14 +2,15 @@ package handler
 
 import (
 	"github.com/go-chi/chi/v5"
+	"go.uber.org/zap"
 
 	"github.com/mgfan1/go-metrics/internal/middleware"
 )
 
-func (h *MetricsHandler) Router() chi.Router {
+func (h *MetricsHandler) Router(log *zap.Logger) chi.Router {
 	r := chi.NewRouter()
 
-	r.Use(middleware.Logging)
+	r.Use(middleware.Logging(log))
 	r.Use(middleware.Gzip)
 
 	r.Get("/", h.List)

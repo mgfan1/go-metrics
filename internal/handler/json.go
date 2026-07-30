@@ -6,7 +6,6 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/mgfan1/go-metrics/internal/logger"
 	models "github.com/mgfan1/go-metrics/internal/model"
 )
 
@@ -43,7 +42,7 @@ func (h *MetricsHandler) UpdateJSON(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeMetric(w, m)
+	h.writeMetric(w, m)
 }
 
 func (h *MetricsHandler) ValueJSON(w http.ResponseWriter, r *http.Request) {
@@ -75,14 +74,14 @@ func (h *MetricsHandler) ValueJSON(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeMetric(w, m)
+	h.writeMetric(w, m)
 }
 
-func writeMetric(w http.ResponseWriter, m models.Metrics) {
+func (h *MetricsHandler) writeMetric(w http.ResponseWriter, m models.Metrics) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 
 	if err := json.NewEncoder(w).Encode(m); err != nil {
-		logger.Log.Info("не отправил ответ", zap.Error(err))
+		h.log.Info("не отправил ответ", zap.Error(err))
 	}
 }

@@ -6,11 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"math/rand"
 	"net/http"
 	"runtime"
 	"time"
+
+	"go.uber.org/zap"
 
 	models "github.com/mgfan1/go-metrics/internal/model"
 )
@@ -22,15 +23,17 @@ type Agent struct {
 	client         *http.Client
 	gauges         map[string]float64
 	pollCount      int64
+	log            *zap.Logger
 }
 
-func New(serverAddr string, poll, report time.Duration) *Agent {
+func New(serverAddr string, poll, report time.Duration, log *zap.Logger) *Agent {
 	return &Agent{
 		baseURL:        "http://" + serverAddr,
 		pollInterval:   poll,
 		reportInterval: report,
 		client:         &http.Client{Timeout: 5 * time.Second},
 		gauges:         make(map[string]float64),
+		log:            log,
 	}
 }
 
@@ -89,13 +92,13 @@ func (a *Agent) poll() {
 func (a *Agent) report() {
 	for name, value := range a.gauges {
 		if err := a.send(models.Metrics{ID: name, MType: models.Gauge, Value: &value}); err != nil {
-			log.Printf("agent: %s: %v", name, err)
+			a.log.Info("не отправил метрику", zap.String("id", name), zap.Error(err))
 		}
 	}
 
 	delta := a.pollCount
 	if err := a.send(models.Metrics{ID: "PollCount", MType: models.Counter, Delta: &delta}); err != nil {
-		log.Printf("agent: PollCount: %v", err)
+		a.log.Info("не отправил метрику", zap.String("id", "PollCount"), zap.Error(err))
 		return
 	}
 	a.pollCount -= delta
