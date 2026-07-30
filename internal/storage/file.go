@@ -11,7 +11,6 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/mgfan1/go-metrics/internal/logger"
 	models "github.com/mgfan1/go-metrics/internal/model"
 )
 
@@ -19,13 +18,18 @@ type FileStore struct {
 	mu   sync.Mutex
 	repo Repository
 	path string
+	log  *zap.Logger
 }
 
-func NewFileStore(repo Repository, path string) *FileStore {
-	return &FileStore{repo: repo, path: path}
+func NewFileStore(repo Repository, path string, restore bool, log *zap.Logger) (*FileStore, error) {
+	f := &FileStore{repo: repo, path: path, log: log}
+	if !restore {
+		return f, nil
+	}
+	return f, f.load()
 }
 
-func (f *FileStore) Load() error {
+func (f *FileStore) load() error {
 	if f.path == "" {
 		return nil
 	}
@@ -62,7 +66,7 @@ func (f *FileStore) Load() error {
 	return nil
 }
 
-func (f *FileStore) Save() error {
+func (f *FileStore) save() error {
 	if f.path == "" {
 		return nil
 	}
@@ -99,6 +103,10 @@ func (f *FileStore) Save() error {
 	return os.Rename(tmp, f.path)
 }
 
+func (f *FileStore) Close() error {
+	return f.save()
+}
+
 func (f *FileStore) RunPeriodic(ctx context.Context, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -106,8 +114,8 @@ func (f *FileStore) RunPeriodic(ctx context.Context, interval time.Duration) {
 	for {
 		select {
 		case <-ticker.C:
-			if err := f.Save(); err != nil {
-				logger.Log.Info("не сохранил метрики", zap.Error(err))
+			if err := f.save(); err != nil {
+				f.log.Warn("не сохранил метрики", zap.Error(err))
 			}
 		case <-ctx.Done():
 			return
@@ -118,10 +126,11 @@ func (f *FileStore) RunPeriodic(ctx context.Context, interval time.Duration) {
 type syncRepository struct {
 	Repository
 	file *FileStore
+	log  *zap.Logger
 }
 
 func (f *FileStore) SyncRepository() Repository {
-	return &syncRepository{Repository: f.repo, file: f}
+	return &syncRepository{Repository: f.repo, file: f, log: f.log}
 }
 
 func (s *syncRepository) UpdateGauge(name string, value float64) {
@@ -135,7 +144,7 @@ func (s *syncRepository) AddCounter(name string, delta int64) {
 }
 
 func (s *syncRepository) save() {
-	if err := s.file.Save(); err != nil {
-		logger.Log.Info("не сохранил метрики", zap.Error(err))
+	if err := s.file.save(); err != nil {
+		s.log.Warn("не сохранил метрики", zap.Error(err))
 	}
 }

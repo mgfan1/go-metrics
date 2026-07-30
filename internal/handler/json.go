@@ -82,6 +82,6 @@ func (h *MetricsHandler) writeMetric(w http.ResponseWriter, m models.Metrics) {
 	w.WriteHeader(http.StatusOK)
 
 	if err := json.NewEncoder(w).Encode(m); err != nil {
-		h.log.Info("не отправил ответ", zap.Error(err))
+		h.log.Warn("не отправил ответ", zap.Error(err))
 	}
 }

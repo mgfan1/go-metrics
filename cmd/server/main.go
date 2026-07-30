@@ -2,88 +2,72 @@ package main
 
 import (
 	"context"
-	"errors"
-	"log"
-	"net/http"
+	"fmt"
+	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
 	"go.uber.org/zap"
 
+	"github.com/mgfan1/go-metrics/internal/config"
 	"github.com/mgfan1/go-metrics/internal/handler"
-	"github.com/mgfan1/go-metrics/internal/logger"
+	"github.com/mgfan1/go-metrics/internal/server"
 	"github.com/mgfan1/go-metrics/internal/storage"
 )
 
 func main() {
-	if err := run(); err != nil {
-		log.Fatal(err)
+	logger, err := zap.NewProduction()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
 	}
+
+	code := 0
+	if err := run(logger); err != nil {
+		logger.Error("сервер остановлен с ошибкой", zap.Error(err))
+		code = 1
+	}
+
+	_ = logger.Sync()
+	os.Exit(code)
 }
 
-func run() error {
-	cfg, err := parseFlags()
+func run(logger *zap.Logger) error {
+	cfg, err := config.ParseServer()
 	if err != nil {
 		return err
 	}
-
-	if err := logger.Initialize(); err != nil {
-		return err
-	}
-	defer func() { _ = logger.Log.Sync() }()
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
 	store := storage.NewMemStorage()
-	files := storage.NewFileStore(store, cfg.fileStorage)
-
-	if cfg.restore {
-		if err := files.Load(); err != nil {
-			logger.Log.Info("не восстановил метрики", zap.Error(err))
-		}
+	files, err := storage.NewFileStore(store, cfg.FileStorage, cfg.Restore,
+		logger.With(zap.String("component", "storage")))
+	if err != nil {
+		logger.Warn("не восстановил метрики", zap.Error(err))
 	}
 
 	var repo storage.Repository = store
-	if cfg.storeInterval <= 0 {
+	if cfg.StoreInterval <= 0 {
 		repo = files.SyncRepository()
 	} else {
-		go files.RunPeriodic(ctx, time.Duration(cfg.storeInterval)*time.Second)
+		go files.RunPeriodic(ctx, time.Duration(cfg.StoreInterval)*time.Second)
 	}
 
-	srv := &http.Server{
-		Addr:    cfg.addr,
-		Handler: handler.New(repo).Router(),
-	}
+	metrics := handler.New(repo, logger.With(zap.String("component", "handler")))
+	router := metrics.Router(logger.With(zap.String("component", "middleware")))
+	srv := server.New(cfg.Addr, router, logger.With(zap.String("component", "server")))
 
-	stopped := make(chan struct{})
-	go func() {
-		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := srv.Shutdown(shutdownCtx); err != nil {
-			logger.Log.Info("сервер не остановился штатно", zap.Error(err))
-		}
-		close(stopped)
-	}()
-
-	logger.Log.Info("сервер метрик запущен",
-		zap.String("addr", cfg.addr),
-		zap.Int("store_interval", cfg.storeInterval),
-		zap.String("file", cfg.fileStorage),
-		zap.Bool("restore", cfg.restore),
-	)
-
-	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	if err := srv.Run(ctx); err != nil {
 		return err
 	}
-	<-stopped
 
-	if err := files.Save(); err != nil {
+	if err := files.Close(); err != nil {
 		return err
 	}
-	logger.Log.Info("метрики сохранены", zap.String("file", cfg.fileStorage))
+	logger.Info("метрики сохранены")
 
 	return nil
 }

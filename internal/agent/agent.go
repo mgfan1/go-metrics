@@ -92,13 +92,13 @@ func (a *Agent) poll() {
 func (a *Agent) report() {
 	for name, value := range a.gauges {
 		if err := a.send(models.Metrics{ID: name, MType: models.Gauge, Value: &value}); err != nil {
-			a.log.Info("не отправил метрику", zap.String("id", name), zap.Error(err))
+			a.log.Warn("не отправил метрику", zap.String("id", name), zap.Error(err))
 		}
 	}
 
 	delta := a.pollCount
 	if err := a.send(models.Metrics{ID: "PollCount", MType: models.Counter, Delta: &delta}); err != nil {
-		a.log.Info("не отправил метрику", zap.String("id", "PollCount"), zap.Error(err))
+		a.log.Warn("не отправил метрику", zap.String("id", "PollCount"), zap.Error(err))
 		return
 	}
 	a.pollCount -= delta
