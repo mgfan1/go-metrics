@@ -1,14 +1,17 @@
 package agent
 
 import (
+	"bytes"
+	"compress/gzip"
+	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"math/rand"
 	"net/http"
 	"runtime"
-	"strconv"
 	"time"
+
+	"go.uber.org/zap"
 
 	models "github.com/mgfan1/go-metrics/internal/model"
 )
@@ -20,15 +23,17 @@ type Agent struct {
 	client         *http.Client
 	gauges         map[string]float64
 	pollCount      int64
+	log            *zap.Logger
 }
 
-func New(serverAddr string, poll, report time.Duration) *Agent {
+func New(serverAddr string, poll, report time.Duration, log *zap.Logger) *Agent {
 	return &Agent{
 		baseURL:        "http://" + serverAddr,
 		pollInterval:   poll,
 		reportInterval: report,
 		client:         &http.Client{Timeout: 5 * time.Second},
 		gauges:         make(map[string]float64),
+		log:            log,
 	}
 }
 
@@ -86,29 +91,52 @@ func (a *Agent) poll() {
 
 func (a *Agent) report() {
 	for name, value := range a.gauges {
-		a.send(models.Gauge, name, strconv.FormatFloat(value, 'f', -1, 64))
+		if err := a.send(models.Metrics{ID: name, MType: models.Gauge, Value: &value}); err != nil {
+			a.log.Warn("не отправил метрику", zap.String("id", name), zap.Error(err))
+		}
 	}
 
-	a.send(models.Counter, "PollCount", strconv.FormatInt(a.pollCount, 10))
-	a.pollCount = 0
-}
-
-func (a *Agent) send(mType, name, value string) {
-	url := fmt.Sprintf("%s/update/%s/%s/%s", a.baseURL, mType, name, value)
-
-	req, err := http.NewRequest(http.MethodPost, url, http.NoBody)
-	if err != nil {
-		log.Printf("agent: не собрал запрос для %s: %v", name, err)
+	delta := a.pollCount
+	if err := a.send(models.Metrics{ID: "PollCount", MType: models.Counter, Delta: &delta}); err != nil {
+		a.log.Warn("не отправил метрику", zap.String("id", "PollCount"), zap.Error(err))
 		return
 	}
-	req.Header.Set("Content-Type", "text/plain")
+	a.pollCount -= delta
+}
+
+func (a *Agent) send(m models.Metrics) error {
+	body, err := json.Marshal(m)
+	if err != nil {
+		return err
+	}
+
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	if _, err := gz.Write(body); err != nil {
+		return err
+	}
+	if err := gz.Close(); err != nil {
+		return err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, a.baseURL+"/update/", &buf)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Encoding", "gzip")
 
 	resp, err := a.client.Do(req)
 	if err != nil {
-		log.Printf("agent: не отправил %s: %v", name, err)
-		return
+		return err
 	}
+	defer func() { _ = resp.Body.Close() }()
 
 	_, _ = io.Copy(io.Discard, resp.Body)
-	_ = resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("сервер ответил %s", resp.Status)
+	}
+
+	return nil
 }

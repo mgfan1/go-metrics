@@ -1,19 +1,45 @@
 package main
 
 import (
-	"log"
+	"fmt"
+	"os"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/mgfan1/go-metrics/internal/agent"
+	"github.com/mgfan1/go-metrics/internal/config"
 )
 
 func main() {
-	cfg := parseFlags()
+	logger, err := zap.NewProduction()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 
-	poll := time.Duration(cfg.pollInterval) * time.Second
-	report := time.Duration(cfg.reportInterval) * time.Second
+	code := 0
+	if err := run(logger); err != nil {
+		logger.Error("агент остановлен с ошибкой", zap.Error(err))
+		code = 1
+	}
 
-	log.Printf("агент: сервер %s, опрос %s, отправка %s", cfg.addr, poll, report)
+	_ = logger.Sync()
+	os.Exit(code)
+}
 
-	agent.New(cfg.addr, poll, report).Run()
+func run(logger *zap.Logger) error {
+	cfg, err := config.ParseAgent()
+	if err != nil {
+		return err
+	}
+
+	poll := time.Duration(cfg.PollInterval) * time.Second
+	report := time.Duration(cfg.ReportInterval) * time.Second
+
+	logger.Info("агент запущен")
+
+	agent.New(cfg.Addr, poll, report, logger.With(zap.String("component", "agent"))).Run()
+
+	return nil
 }
