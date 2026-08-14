@@ -3,10 +3,13 @@ package agent
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
+	"net"
 	"net/http"
 	"runtime"
 	"time"
@@ -14,6 +17,7 @@ import (
 	"go.uber.org/zap"
 
 	models "github.com/mgfan1/go-metrics/internal/model"
+	"github.com/mgfan1/go-metrics/internal/retry"
 )
 
 type Agent struct {
@@ -37,18 +41,24 @@ func New(serverAddr string, poll, report time.Duration, log *zap.Logger) *Agent 
 	}
 }
 
-func (a *Agent) Run() {
+func (a *Agent) Run(ctx context.Context) {
 	pollTicker := time.NewTicker(a.pollInterval)
 	reportTicker := time.NewTicker(a.reportInterval)
 	defer pollTicker.Stop()
 	defer reportTicker.Stop()
 
 	for {
+		if ctx.Err() != nil {
+			return
+		}
+
 		select {
+		case <-ctx.Done():
+			return
 		case <-pollTicker.C:
 			a.poll()
 		case <-reportTicker.C:
-			a.report()
+			a.report(ctx)
 		}
 	}
 }
@@ -89,7 +99,7 @@ func (a *Agent) poll() {
 	a.pollCount++
 }
 
-func (a *Agent) report() {
+func (a *Agent) report(ctx context.Context) {
 	delta := a.pollCount
 
 	batch := make([]models.Metrics, 0, len(a.gauges)+1)
@@ -98,14 +108,20 @@ func (a *Agent) report() {
 	}
 	batch = append(batch, models.Metrics{ID: "PollCount", MType: models.Counter, Delta: &delta})
 
-	if err := a.send(batch); err != nil {
+	err := retry.Do(ctx, a.log, retriableSend, func() error { return a.send(ctx, batch) })
+	if err != nil {
 		a.log.Warn("не отправил метрики", zap.Int("count", len(batch)), zap.Error(err))
 		return
 	}
 	a.pollCount -= delta
 }
 
-func (a *Agent) send(batch []models.Metrics) error {
+func retriableSend(err error) bool {
+	var netErr net.Error
+	return errors.As(err, &netErr)
+}
+
+func (a *Agent) send(ctx context.Context, batch []models.Metrics) error {
 	body, err := json.Marshal(batch)
 	if err != nil {
 		return err
@@ -120,7 +136,7 @@ func (a *Agent) send(batch []models.Metrics) error {
 		return err
 	}
 
-	req, err := http.NewRequest(http.MethodPost, a.baseURL+"/updates/", &buf)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.baseURL+"/updates/", &buf)
 	if err != nil {
 		return err
 	}

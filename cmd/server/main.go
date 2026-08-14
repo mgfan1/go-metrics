@@ -70,7 +70,7 @@ func run(logger *zap.Logger) error {
 	var files *storage.FileStore
 
 	if db != nil {
-		pg, err := storage.NewPGStorage(db, storeLog)
+		pg, err := storage.NewPGStorage(ctx, db, storeLog)
 		if err != nil {
 			logger.Warn("не подготовил хранилище в базе", zap.Error(err))
 			db.Close()

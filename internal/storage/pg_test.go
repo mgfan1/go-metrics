@@ -3,10 +3,17 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
+	"errors"
+	"fmt"
+	"net"
 	"os"
 	"strings"
+	"syscall"
 	"testing"
 
+	"github.com/jackc/pgerrcode"
+	"github.com/jackc/pgx/v5/pgconn"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -43,7 +50,7 @@ func newPGStorage(t *testing.T) *PGStorage {
 
 	db := openTestDB(t)
 
-	store, err := NewPGStorage(db, zap.NewNop())
+	store, err := NewPGStorage(context.Background(), db, zap.NewNop())
 	require.NoError(t, err)
 
 	_, err = db.ExecContext(context.Background(), "TRUNCATE TABLE metrics")
@@ -168,6 +175,35 @@ func TestPGMigrationsAreIdempotent(t *testing.T) {
 	newPGStorage(t)
 
 	db := openTestDB(t)
-	_, err := NewPGStorage(db, zap.NewNop())
+	_, err := NewPGStorage(context.Background(), db, zap.NewNop())
 	assert.NoError(t, err, "повторный запуск миграций не должен быть ошибкой")
+}
+
+func TestRetriablePG(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"обрыв соединения", &pgconn.PgError{Code: pgerrcode.ConnectionException}, true},
+		{"сбой при установлении соединения", &pgconn.PgError{Code: pgerrcode.SQLClientUnableToEstablishSQLConnection}, true},
+		{"взаимная блокировка", &pgconn.PgError{Code: pgerrcode.DeadlockDetected}, true},
+		{"сбой сериализации", &pgconn.PgError{Code: pgerrcode.SerializationFailure}, true},
+		{"база ещё не принимает соединения", &pgconn.PgError{Code: pgerrcode.CannotConnectNow}, true},
+		{"база выключена администратором", &pgconn.PgError{Code: pgerrcode.AdminShutdown}, true},
+		{"нарушение уникальности", &pgconn.PgError{Code: pgerrcode.UniqueViolation}, false},
+		{"значение не влезло в колонку", &pgconn.PgError{Code: pgerrcode.StringDataRightTruncationDataException}, false},
+		{"запрос отменён", &pgconn.PgError{Code: pgerrcode.QueryCanceled}, false},
+		{"обёрнутая ошибка сети", fmt.Errorf("не подключился: %w", &net.OpError{Err: syscall.ECONNREFUSED}), true},
+		{"разорванное соединение пула", driver.ErrBadConn, true},
+		{"обычная ошибка", errors.New("сбой"), false},
+		{"отмена контекста", context.Canceled, false},
+		{"без ошибки", nil, false},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			assert.Equal(t, c.want, retriablePG(c.err))
+		})
+	}
 }

@@ -5,9 +5,12 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -86,7 +89,7 @@ func TestReport(t *testing.T) {
 
 	a := New(strings.TrimPrefix(srv.URL, "http://"), time.Second, time.Second, zap.NewNop())
 	a.poll()
-	a.report()
+	a.report(context.Background())
 
 	got := dump()
 	require.Len(t, got, 1, "метрики должны уходить одним запросом")
@@ -120,7 +123,7 @@ func TestReportSendsGzip(t *testing.T) {
 
 	a := New(strings.TrimPrefix(srv.URL, "http://"), time.Second, time.Second, zap.NewNop())
 	a.poll()
-	a.report()
+	a.report(context.Background())
 
 	got := dump()
 	require.Len(t, got, 1)
@@ -157,7 +160,7 @@ func TestSendMetricPayload(t *testing.T) {
 			defer srv.Close()
 
 			a := New(strings.TrimPrefix(srv.URL, "http://"), time.Second, time.Second, zap.NewNop())
-			require.NoError(t, a.send([]models.Metrics{c.metric}))
+			require.NoError(t, a.send(context.Background(), []models.Metrics{c.metric}))
 
 			got := dump()
 			require.Len(t, got, 1)
@@ -186,7 +189,7 @@ func TestReportResetsPollCount(t *testing.T) {
 	a := New(strings.TrimPrefix(srv.URL, "http://"), time.Second, time.Second, zap.NewNop())
 	a.poll()
 	a.poll()
-	a.report()
+	a.report(context.Background())
 
 	if a.pollCount != 0 {
 		t.Errorf("после report pollCount = %d, хотел 0", a.pollCount)
@@ -194,16 +197,34 @@ func TestReportResetsPollCount(t *testing.T) {
 }
 
 func TestReportKeepsPollCountOnFailure(t *testing.T) {
-	srv, _ := newCollector()
-	addr := strings.TrimPrefix(srv.URL, "http://")
-	srv.Close()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
 
-	a := New(addr, time.Second, time.Second, zap.NewNop())
+	a := New(strings.TrimPrefix(srv.URL, "http://"), time.Second, time.Second, zap.NewNop())
 	a.poll()
 	a.poll()
-	a.report()
+	a.report(context.Background())
 
-	assert.Equal(t, int64(2), a.pollCount, "при недоступном сервере счётчик опросов терять нельзя")
+	assert.Equal(t, int64(2), a.pollCount, "при ошибке отправки счётчик опросов терять нельзя")
+}
+
+func TestRetriableSend(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"сервер недоступен", &url.Error{Op: "Post", URL: "http://localhost:8080/updates/", Err: &net.OpError{Op: "dial", Err: errors.New("соединение отклонено")}}, true},
+		{"сервер ответил ошибкой", errors.New("сервер ответил 500 Internal Server Error"), false},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			assert.Equal(t, c.want, retriableSend(c.err))
+		})
+	}
 }
 
 func TestSendReturnsErrorOnBadStatus(t *testing.T) {
@@ -215,7 +236,7 @@ func TestSendReturnsErrorOnBadStatus(t *testing.T) {
 	value := 1.0
 	a := New(strings.TrimPrefix(srv.URL, "http://"), time.Second, time.Second, zap.NewNop())
 
-	err := a.send([]models.Metrics{{ID: "Alloc", MType: models.Gauge, Value: &value}})
+	err := a.send(context.Background(), []models.Metrics{{ID: "Alloc", MType: models.Gauge, Value: &value}})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "500")
 }
@@ -227,7 +248,7 @@ func TestAgentSendsToRealServer(t *testing.T) {
 
 	a := New(strings.TrimPrefix(srv.URL, "http://"), time.Second, time.Second, zap.NewNop())
 	a.poll()
-	a.report()
+	a.report(context.Background())
 
 	ctx := context.Background()
 

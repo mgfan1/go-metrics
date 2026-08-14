@@ -1,8 +1,11 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"go.uber.org/zap"
@@ -34,12 +37,15 @@ func run(logger *zap.Logger) error {
 		return err
 	}
 
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
 	poll := time.Duration(cfg.PollInterval) * time.Second
 	report := time.Duration(cfg.ReportInterval) * time.Second
 
 	logger.Info("агент запущен")
 
-	agent.New(cfg.Addr, poll, report, logger.With(zap.String("component", "agent"))).Run()
+	agent.New(cfg.Addr, poll, report, logger.With(zap.String("component", "agent"))).Run(ctx)
 
 	return nil
 }
