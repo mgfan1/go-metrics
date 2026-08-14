@@ -26,15 +26,25 @@ func (h *MetricsHandler) UpdateJSON(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "не задано значение gauge", http.StatusBadRequest)
 			return
 		}
-		h.store.UpdateGauge(m.ID, *m.Value)
+		if err := h.store.UpdateGauge(r.Context(), m.ID, *m.Value); err != nil {
+			h.storeFailed(w, err)
+			return
+		}
 		m.Delta = nil
 	case models.Counter:
 		if m.Delta == nil {
 			http.Error(w, "не задано значение counter", http.StatusBadRequest)
 			return
 		}
-		h.store.AddCounter(m.ID, *m.Delta)
-		total, _ := h.store.Counter(m.ID)
+		if err := h.store.AddCounter(r.Context(), m.ID, *m.Delta); err != nil {
+			h.storeFailed(w, err)
+			return
+		}
+		total, err := h.store.Counter(r.Context(), m.ID)
+		if err != nil {
+			h.readFailed(w, r, err)
+			return
+		}
 		m.Delta = &total
 		m.Value = nil
 	default:
@@ -54,17 +64,17 @@ func (h *MetricsHandler) ValueJSON(w http.ResponseWriter, r *http.Request) {
 
 	switch m.MType {
 	case models.Gauge:
-		v, ok := h.store.Gauge(m.ID)
-		if !ok {
-			http.NotFound(w, r)
+		v, err := h.store.Gauge(r.Context(), m.ID)
+		if err != nil {
+			h.readFailed(w, r, err)
 			return
 		}
 		m.Value = &v
 		m.Delta = nil
 	case models.Counter:
-		v, ok := h.store.Counter(m.ID)
-		if !ok {
-			http.NotFound(w, r)
+		v, err := h.store.Counter(r.Context(), m.ID)
+		if err != nil {
+			h.readFailed(w, r, err)
 			return
 		}
 		m.Delta = &v
