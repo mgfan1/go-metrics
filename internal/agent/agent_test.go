@@ -49,7 +49,7 @@ func newCollector() (*httptest.Server, func() []captured) {
 	}
 }
 
-func unpack(t *testing.T, raw []byte) models.Metrics {
+func unpack(t *testing.T, raw []byte) []models.Metrics {
 	t.Helper()
 
 	zr, err := gzip.NewReader(bytes.NewReader(raw))
@@ -59,9 +59,9 @@ func unpack(t *testing.T, raw []byte) models.Metrics {
 	require.NoError(t, err, "gzip-поток оборван")
 	require.NoError(t, zr.Close())
 
-	var m models.Metrics
-	require.NoError(t, json.Unmarshal(body, &m))
-	return m
+	var batch []models.Metrics
+	require.NoError(t, json.Unmarshal(body, &batch))
+	return batch
 }
 
 func TestPoll(t *testing.T) {
@@ -89,12 +89,14 @@ func TestReport(t *testing.T) {
 	a.report()
 
 	got := dump()
-	require.Len(t, got, 29)
+	require.Len(t, got, 1, "метрики должны уходить одним запросом")
+	assert.Equal(t, "/updates/", got[0].path)
 
-	names := make(map[string]models.Metrics, len(got))
-	for _, c := range got {
-		assert.Equal(t, "/update/", c.path)
-		m := unpack(t, c.raw)
+	batch := unpack(t, got[0].raw)
+	require.Len(t, batch, 29)
+
+	names := make(map[string]models.Metrics, len(batch))
+	for _, m := range batch {
 		names[m.ID] = m
 	}
 
@@ -121,16 +123,16 @@ func TestReportSendsGzip(t *testing.T) {
 	a.report()
 
 	got := dump()
-	require.NotEmpty(t, got)
+	require.Len(t, got, 1)
 
-	for _, c := range got {
-		assert.Equal(t, "application/json", c.headers.Get("Content-Type"))
-		assert.Equal(t, "gzip", c.headers.Get("Content-Encoding"))
+	c := got[0]
+	assert.Equal(t, "application/json", c.headers.Get("Content-Type"))
+	assert.Equal(t, "gzip", c.headers.Get("Content-Encoding"))
 
-		require.GreaterOrEqual(t, len(c.raw), 2)
-		assert.Equal(t, []byte{0x1f, 0x8b}, c.raw[:2], "тело не сжато gzip")
+	require.GreaterOrEqual(t, len(c.raw), 2)
+	assert.Equal(t, []byte{0x1f, 0x8b}, c.raw[:2], "тело не сжато gzip")
 
-		m := unpack(t, c.raw)
+	for _, m := range unpack(t, c.raw) {
 		assert.NotEmpty(t, m.ID)
 	}
 }
@@ -155,7 +157,7 @@ func TestSendMetricPayload(t *testing.T) {
 			defer srv.Close()
 
 			a := New(strings.TrimPrefix(srv.URL, "http://"), time.Second, time.Second, zap.NewNop())
-			a.send(c.metric)
+			require.NoError(t, a.send([]models.Metrics{c.metric}))
 
 			got := dump()
 			require.Len(t, got, 1)
@@ -165,11 +167,12 @@ func TestSendMetricPayload(t *testing.T) {
 			body, err := io.ReadAll(zr)
 			require.NoError(t, err)
 
-			var fields map[string]any
+			var fields []map[string]any
 			require.NoError(t, json.Unmarshal(body, &fields))
+			require.Len(t, fields, 1)
 
-			assert.Contains(t, fields, c.present)
-			assert.NotContains(t, fields, c.absent)
+			assert.Contains(t, fields[0], c.present)
+			assert.NotContains(t, fields[0], c.absent)
 		})
 	}
 }
@@ -212,7 +215,7 @@ func TestSendReturnsErrorOnBadStatus(t *testing.T) {
 	value := 1.0
 	a := New(strings.TrimPrefix(srv.URL, "http://"), time.Second, time.Second, zap.NewNop())
 
-	err := a.send(models.Metrics{ID: "Alloc", MType: models.Gauge, Value: &value})
+	err := a.send([]models.Metrics{{ID: "Alloc", MType: models.Gauge, Value: &value}})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "500")
 }

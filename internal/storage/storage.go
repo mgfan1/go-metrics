@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"sync"
+
+	models "github.com/mgfan1/go-metrics/internal/model"
 )
 
 var ErrNotFound = errors.New("метрика не найдена")
@@ -11,6 +13,7 @@ var ErrNotFound = errors.New("метрика не найдена")
 type Repository interface {
 	UpdateGauge(ctx context.Context, name string, value float64) error
 	AddCounter(ctx context.Context, name string, delta int64) error
+	UpdateBatch(ctx context.Context, metrics []models.Metrics) error
 	Gauge(ctx context.Context, name string) (float64, error)
 	Counter(ctx context.Context, name string) (int64, error)
 	Snapshot(ctx context.Context) (gauges map[string]float64, counters map[string]int64, err error)
@@ -40,6 +43,26 @@ func (s *MemStorage) AddCounter(_ context.Context, name string, delta int64) err
 	s.mu.Lock()
 	s.counters[name] += delta
 	s.mu.Unlock()
+	return nil
+}
+
+func (s *MemStorage) UpdateBatch(_ context.Context, metrics []models.Metrics) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, m := range metrics {
+		switch m.MType {
+		case models.Gauge:
+			if m.Value != nil {
+				s.gauges[m.ID] = *m.Value
+			}
+		case models.Counter:
+			if m.Delta != nil {
+				s.counters[m.ID] += *m.Delta
+			}
+		}
+	}
+
 	return nil
 }
 

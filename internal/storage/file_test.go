@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"go.uber.org/zap"
+
+	models "github.com/mgfan1/go-metrics/internal/model"
 )
 
 func newFileStore(t *testing.T, repo Repository, path string, restore bool) *FileStore {
@@ -149,6 +151,27 @@ func TestSyncRepositorySavesOnWrite(t *testing.T) {
 
 	if v, err := dst.Gauge(ctx, "Alloc"); err != nil || v != 3.5 {
 		t.Errorf("gauge = %v, %v; синхронная запись не сработала", v, err)
+	}
+}
+
+func TestSyncRepositorySavesBatch(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "metrics.json")
+
+	repo := newFileStore(t, NewMemStorage(), path, false).SyncRepository()
+	batch := []models.Metrics{counter("PollCount", 5), gauge("Alloc", 1.5), counter("PollCount", 3)}
+	if err := repo.UpdateBatch(ctx, batch); err != nil {
+		t.Fatalf("UpdateBatch: %v", err)
+	}
+
+	dst := NewMemStorage()
+	newFileStore(t, dst, path, true)
+
+	if v, err := dst.Gauge(ctx, "Alloc"); err != nil || v != 1.5 {
+		t.Errorf("gauge = %v, %v; батч не сохранён на диск", v, err)
+	}
+	if v, err := dst.Counter(ctx, "PollCount"); err != nil || v != 8 {
+		t.Errorf("counter = %v, %v; хотел 8, nil", v, err)
 	}
 }
 

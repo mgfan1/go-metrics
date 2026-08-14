@@ -21,6 +21,10 @@ func (h *MetricsHandler) Router(log *zap.Logger) chi.Router {
 		r.Post("/{type}/{name}/{value}", h.Update)
 	})
 
+	r.Route("/updates", func(r chi.Router) {
+		r.Post("/", h.UpdatesJSON)
+	})
+
 	r.Route("/value", func(r chi.Router) {
 		r.Post("/", h.ValueJSON)
 		r.Get("/{type}/{name}", h.Value)
