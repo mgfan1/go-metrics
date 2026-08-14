@@ -218,7 +218,7 @@ func TestSendReturnsErrorOnBadStatus(t *testing.T) {
 
 func TestAgentSendsToRealServer(t *testing.T) {
 	store := storage.NewMemStorage()
-	srv := httptest.NewServer(handler.New(store, zap.NewNop()).Router(zap.NewNop()))
+	srv := httptest.NewServer(handler.New(store, nil, zap.NewNop()).Router(zap.NewNop()))
 	defer srv.Close()
 
 	a := New(strings.TrimPrefix(srv.URL, "http://"), time.Second, time.Second, zap.NewNop())

@@ -12,6 +12,7 @@ type Server struct {
 	StoreInterval int
 	FileStorage   string
 	Restore       bool
+	DatabaseDSN   string
 }
 
 func ParseServer() (Server, error) {
@@ -21,6 +22,7 @@ func ParseServer() (Server, error) {
 	flag.IntVar(&cfg.StoreInterval, "i", 300, "интервал сохранения метрик в секундах, при значении 0 писать сразу")
 	flag.StringVar(&cfg.FileStorage, "f", "/tmp/metrics-db.json", "файл для хранения метрик")
 	flag.BoolVar(&cfg.Restore, "r", true, "загружать сохранённые метрики при старте")
+	flag.StringVar(&cfg.DatabaseDSN, "d", "", "строка подключения к базе данных")
 	flag.Parse()
 
 	if v, ok := os.LookupEnv("ADDRESS"); ok {
@@ -42,6 +44,9 @@ func ParseServer() (Server, error) {
 			return cfg, fmt.Errorf("RESTORE: %w", err)
 		}
 		cfg.Restore = b
+	}
+	if v, ok := os.LookupEnv("DATABASE_DSN"); ok {
+		cfg.DatabaseDSN = v
 	}
 
 	return cfg, nil

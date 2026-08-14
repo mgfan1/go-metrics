@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"html/template"
 	"net/http"
 	"sort"
@@ -13,13 +14,18 @@ import (
 	"github.com/mgfan1/go-metrics/internal/storage"
 )
 
+type Pinger interface {
+	PingContext(ctx context.Context) error
+}
+
 type MetricsHandler struct {
 	store storage.Repository
+	db    Pinger
 	log   *zap.Logger
 }
 
-func New(store storage.Repository, log *zap.Logger) *MetricsHandler {
-	return &MetricsHandler{store: store, log: log}
+func New(store storage.Repository, db Pinger, log *zap.Logger) *MetricsHandler {
+	return &MetricsHandler{store: store, db: db, log: log}
 }
 
 func (h *MetricsHandler) Update(w http.ResponseWriter, r *http.Request) {

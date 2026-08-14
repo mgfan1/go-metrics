@@ -14,6 +14,7 @@ func (h *MetricsHandler) Router(log *zap.Logger) chi.Router {
 	r.Use(middleware.Gzip)
 
 	r.Get("/", h.List)
+	r.Get("/ping", h.Ping)
 
 	r.Route("/update", func(r chi.Router) {
 		r.Post("/", h.UpdateJSON)

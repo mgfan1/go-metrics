@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"go.uber.org/zap"
 
 	"github.com/mgfan1/go-metrics/internal/config"
@@ -56,7 +58,22 @@ func run(logger *zap.Logger) error {
 		go files.RunPeriodic(ctx, time.Duration(cfg.StoreInterval)*time.Second)
 	}
 
-	metrics := handler.New(repo, logger.With(zap.String("component", "handler")))
+	var pinger handler.Pinger
+	if cfg.DatabaseDSN != "" {
+		db, err := sql.Open("pgx", cfg.DatabaseDSN)
+		if err != nil {
+			logger.Warn("не открыл соединение с базой", zap.Error(err))
+		} else {
+			db.SetMaxOpenConns(10)
+			db.SetMaxIdleConns(10)
+			db.SetConnMaxIdleTime(4 * time.Minute)
+
+			defer db.Close()
+			pinger = db
+		}
+	}
+
+	metrics := handler.New(repo, pinger, logger.With(zap.String("component", "handler")))
 	router := metrics.Router(logger.With(zap.String("component", "middleware")))
 	srv := server.New(cfg.Addr, router, logger.With(zap.String("component", "server")))
 

@@ -16,7 +16,7 @@ import (
 
 func newTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
-	h := New(storage.NewMemStorage(), zap.NewNop())
+	h := New(storage.NewMemStorage(), nil, zap.NewNop())
 	return httptest.NewServer(h.Router(zap.NewNop()))
 }
 
