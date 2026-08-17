@@ -3,7 +3,6 @@ package agent
 import (
 	"bytes"
 	"compress/gzip"
-	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -89,7 +88,7 @@ func TestReport(t *testing.T) {
 
 	a := New(strings.TrimPrefix(srv.URL, "http://"), time.Second, time.Second, zap.NewNop())
 	a.poll()
-	a.report(context.Background())
+	a.report(t.Context())
 
 	got := dump()
 	require.Len(t, got, 1, "метрики должны уходить одним запросом")
@@ -123,7 +122,7 @@ func TestReportSendsGzip(t *testing.T) {
 
 	a := New(strings.TrimPrefix(srv.URL, "http://"), time.Second, time.Second, zap.NewNop())
 	a.poll()
-	a.report(context.Background())
+	a.report(t.Context())
 
 	got := dump()
 	require.Len(t, got, 1)
@@ -160,7 +159,7 @@ func TestSendMetricPayload(t *testing.T) {
 			defer srv.Close()
 
 			a := New(strings.TrimPrefix(srv.URL, "http://"), time.Second, time.Second, zap.NewNop())
-			require.NoError(t, a.send(context.Background(), []models.Metrics{c.metric}))
+			require.NoError(t, a.send(t.Context(), []models.Metrics{c.metric}))
 
 			got := dump()
 			require.Len(t, got, 1)
@@ -189,7 +188,7 @@ func TestReportResetsPollCount(t *testing.T) {
 	a := New(strings.TrimPrefix(srv.URL, "http://"), time.Second, time.Second, zap.NewNop())
 	a.poll()
 	a.poll()
-	a.report(context.Background())
+	a.report(t.Context())
 
 	if a.pollCount != 0 {
 		t.Errorf("после report pollCount = %d, хотел 0", a.pollCount)
@@ -205,7 +204,7 @@ func TestReportKeepsPollCountOnFailure(t *testing.T) {
 	a := New(strings.TrimPrefix(srv.URL, "http://"), time.Second, time.Second, zap.NewNop())
 	a.poll()
 	a.poll()
-	a.report(context.Background())
+	a.report(t.Context())
 
 	assert.Equal(t, int64(2), a.pollCount, "при ошибке отправки счётчик опросов терять нельзя")
 }
@@ -236,7 +235,7 @@ func TestSendReturnsErrorOnBadStatus(t *testing.T) {
 	value := 1.0
 	a := New(strings.TrimPrefix(srv.URL, "http://"), time.Second, time.Second, zap.NewNop())
 
-	err := a.send(context.Background(), []models.Metrics{{ID: "Alloc", MType: models.Gauge, Value: &value}})
+	err := a.send(t.Context(), []models.Metrics{{ID: "Alloc", MType: models.Gauge, Value: &value}})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "500")
 }
@@ -248,9 +247,9 @@ func TestAgentSendsToRealServer(t *testing.T) {
 
 	a := New(strings.TrimPrefix(srv.URL, "http://"), time.Second, time.Second, zap.NewNop())
 	a.poll()
-	a.report(context.Background())
+	a.report(t.Context())
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	v, err := store.Gauge(ctx, "Alloc")
 	require.NoError(t, err, "сервер не сохранил Alloc")

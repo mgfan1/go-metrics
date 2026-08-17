@@ -1,7 +1,6 @@
 package storage
 
 import (
-	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -24,7 +23,7 @@ func newFileStore(t *testing.T, repo Repository, path string, restore bool) *Fil
 }
 
 func TestSaveThenLoad(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "metrics.json")
 
 	src := NewMemStorage()
@@ -47,7 +46,7 @@ func TestSaveThenLoad(t *testing.T) {
 }
 
 func TestRestoreDisabled(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "metrics.json")
 
 	src := NewMemStorage()
@@ -65,7 +64,7 @@ func TestRestoreDisabled(t *testing.T) {
 }
 
 func TestLoadMissingFile(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "нет-такого.json")
 
 	store := NewMemStorage()
@@ -94,7 +93,7 @@ func TestLoadCorruptedFile(t *testing.T) {
 }
 
 func TestSaveOverwrites(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "metrics.json")
 
 	store := NewMemStorage()
@@ -119,7 +118,7 @@ func TestSaveOverwrites(t *testing.T) {
 }
 
 func TestCloseSavesMetrics(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "metrics.json")
 
 	store := NewMemStorage()
@@ -138,7 +137,7 @@ func TestCloseSavesMetrics(t *testing.T) {
 }
 
 func TestSyncRepositorySavesOnWrite(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "metrics.json")
 
 	repo := newFileStore(t, NewMemStorage(), path, false).SyncRepository()
@@ -155,7 +154,7 @@ func TestSyncRepositorySavesOnWrite(t *testing.T) {
 }
 
 func TestSyncRepositorySavesBatch(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "metrics.json")
 
 	repo := newFileStore(t, NewMemStorage(), path, false).SyncRepository()
@@ -176,7 +175,7 @@ func TestSyncRepositorySavesBatch(t *testing.T) {
 }
 
 func TestConcurrentSaveKeepsFileValid(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "metrics.json")
 
 	repo := newFileStore(t, NewMemStorage(), path, false).SyncRepository()
@@ -204,7 +203,7 @@ func TestConcurrentSaveKeepsFileValid(t *testing.T) {
 
 func TestEmptyPathDoesNothing(t *testing.T) {
 	store := NewMemStorage()
-	store.UpdateGauge(context.Background(), "Alloc", 1)
+	store.UpdateGauge(t.Context(), "Alloc", 1)
 
 	files := newFileStore(t, store, "", true)
 	if err := files.Close(); err != nil {

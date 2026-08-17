@@ -6,8 +6,10 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"sort"
+	"strings"
 	"syscall"
 
 	"github.com/golang-migrate/migrate/v4"
@@ -30,14 +32,14 @@ const (
 )
 
 type PGStorage struct {
-	db  *sql.DB
-	log *zap.Logger
+	db      *sql.DB
+	retrier *retry.Retrier
 }
 
 func NewPGStorage(ctx context.Context, db *sql.DB, log *zap.Logger) (*PGStorage, error) {
-	s := &PGStorage{db: db, log: log}
+	s := &PGStorage{db: db, retrier: retry.New(log)}
 
-	if err := s.retry(ctx, func() error { return applyMigrations(ctx, db) }); err != nil {
+	if err := s.retry(ctx, func() error { return applyMigrations(ctx, db, migrations.FS, ".") }); err != nil {
 		return nil, err
 	}
 	log.Info("схема метрик готова")
@@ -65,7 +67,7 @@ func retriableCode(code string) bool {
 	}
 
 	switch code {
-	case pgerrcode.CannotConnectNow, pgerrcode.AdminShutdown, pgerrcode.CrashShutdown:
+	case pgerrcode.CannotConnectNow, pgerrcode.AdminShutdown, pgerrcode.CrashShutdown, pgerrcode.TooManyConnections:
 		return true
 	default:
 		return false
@@ -73,11 +75,11 @@ func retriableCode(code string) bool {
 }
 
 func (s *PGStorage) retry(ctx context.Context, op func() error) error {
-	return retry.Do(ctx, s.log, retriablePG, op)
+	return s.retrier.Do(ctx, retriablePG, op)
 }
 
-func applyMigrations(ctx context.Context, db *sql.DB) error {
-	src, err := iofs.New(migrations.FS, ".")
+func applyMigrations(ctx context.Context, db *sql.DB, src fs.FS, path string) error {
+	source, err := iofs.New(src, path)
 	if err != nil {
 		return fmt.Errorf("не прочитал миграции: %w", err)
 	}
@@ -93,7 +95,7 @@ func applyMigrations(ctx context.Context, db *sql.DB) error {
 		return fmt.Errorf("не подготовил драйвер миграций: %w", err)
 	}
 
-	m, err := migrate.NewWithInstance("iofs", src, "postgres", drv)
+	m, err := migrate.NewWithInstance("iofs", source, "postgres", drv)
 	if err != nil {
 		return fmt.Errorf("не создал мигратор: %w", err)
 	}
@@ -168,35 +170,56 @@ func (s *PGStorage) UpdateBatch(ctx context.Context, metrics []models.Metrics) e
 	return s.retry(ctx, func() error { return s.updateBatch(ctx, batch) })
 }
 
+func upsertBatch(mtype, column, update string, args []any) string {
+	var b strings.Builder
+	b.WriteString("INSERT INTO metrics (id, mtype, " + column + ") VALUES ")
+
+	for i := 0; i < len(args); i += 2 {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		fmt.Fprintf(&b, "($%d, '%s', $%d)", i+1, mtype, i+2)
+	}
+
+	b.WriteString(" ON CONFLICT (id, mtype) DO UPDATE SET " + update)
+
+	return b.String()
+}
+
 func (s *PGStorage) updateBatch(ctx context.Context, batch []models.Metrics) error {
+	gauges := make([]any, 0, len(batch)*2)
+	counters := make([]any, 0, len(batch)*2)
+
+	for _, m := range batch {
+		switch m.MType {
+		case models.Gauge:
+			gauges = append(gauges, m.ID, *m.Value)
+		case models.Counter:
+			counters = append(counters, m.ID, *m.Delta)
+		}
+	}
+
+	if len(gauges) == 0 && len(counters) == 0 {
+		return nil
+	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("не начал транзакцию: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	gauge, err := tx.PrepareContext(ctx, upsertGauge)
-	if err != nil {
-		return err
+	if len(gauges) > 0 {
+		query := upsertBatch(models.Gauge, "value", "value = EXCLUDED.value", gauges)
+		if _, err := tx.ExecContext(ctx, query, gauges...); err != nil {
+			return err
+		}
 	}
-	defer gauge.Close()
 
-	counter, err := tx.PrepareContext(ctx, upsertCounter)
-	if err != nil {
-		return err
-	}
-	defer counter.Close()
-
-	for _, m := range batch {
-		switch m.MType {
-		case models.Gauge:
-			if _, err := gauge.ExecContext(ctx, m.ID, *m.Value); err != nil {
-				return err
-			}
-		case models.Counter:
-			if _, err := counter.ExecContext(ctx, m.ID, *m.Delta); err != nil {
-				return err
-			}
+	if len(counters) > 0 {
+		query := upsertBatch(models.Counter, "delta", "delta = metrics.delta + EXCLUDED.delta", counters)
+		if _, err := tx.ExecContext(ctx, query, counters...); err != nil {
+			return err
 		}
 	}
 

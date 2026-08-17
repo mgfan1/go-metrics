@@ -11,14 +11,6 @@ import (
 	"go.uber.org/zap"
 )
 
-func setDelays(t *testing.T, d ...time.Duration) {
-	t.Helper()
-
-	saved := delays
-	delays = d
-	t.Cleanup(func() { delays = saved })
-}
-
 func always(error) bool { return true }
 
 func never(error) bool { return false }
@@ -64,10 +56,10 @@ func TestDo(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			setDelays(t, time.Microsecond, time.Microsecond, time.Microsecond)
+			r := New(zap.NewNop(), time.Microsecond, time.Microsecond, time.Microsecond)
 
 			calls := 0
-			err := Do(context.Background(), zap.NewNop(), c.retriable, func() error {
+			err := r.Do(t.Context(), c.retriable, func() error {
 				result := c.results[calls]
 				calls++
 				return result
@@ -84,9 +76,9 @@ func TestDo(t *testing.T) {
 }
 
 func TestDoStopsOnCanceledContext(t *testing.T) {
-	setDelays(t, time.Second, time.Second, time.Second)
+	r := New(zap.NewNop(), time.Second, time.Second, time.Second)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	time.AfterFunc(20*time.Millisecond, cancel)
@@ -94,7 +86,7 @@ func TestDoStopsOnCanceledContext(t *testing.T) {
 	calls := 0
 	start := time.Now()
 
-	err := Do(ctx, zap.NewNop(), always, func() error {
+	err := r.Do(ctx, always, func() error {
 		calls++
 		return errors.New("сбой")
 	})

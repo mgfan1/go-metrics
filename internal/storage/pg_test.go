@@ -36,7 +36,7 @@ func openTestDB(t *testing.T) *sql.DB {
 	if err != nil {
 		t.Skipf("нет базы для теста: %v", err)
 	}
-	if err := db.PingContext(context.Background()); err != nil {
+	if err := db.PingContext(t.Context()); err != nil {
 		db.Close()
 		t.Skipf("нет базы для теста: %v", err)
 	}
@@ -50,17 +50,17 @@ func newPGStorage(t *testing.T) *PGStorage {
 
 	db := openTestDB(t)
 
-	store, err := NewPGStorage(context.Background(), db, zap.NewNop())
+	store, err := NewPGStorage(t.Context(), db, zap.NewNop())
 	require.NoError(t, err)
 
-	_, err = db.ExecContext(context.Background(), "TRUNCATE TABLE metrics")
+	_, err = db.ExecContext(t.Context(), "TRUNCATE TABLE metrics")
 	require.NoError(t, err)
 
 	return store
 }
 
 func TestPGGaugeReplaces(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	s := newPGStorage(t)
 
 	require.NoError(t, s.UpdateGauge(ctx, "Alloc", 100.5))
@@ -72,7 +72,7 @@ func TestPGGaugeReplaces(t *testing.T) {
 }
 
 func TestPGCounterAccumulates(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	s := newPGStorage(t)
 
 	require.NoError(t, s.AddCounter(ctx, "PollCount", 5))
@@ -84,7 +84,7 @@ func TestPGCounterAccumulates(t *testing.T) {
 }
 
 func TestPGMissingMetric(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	s := newPGStorage(t)
 
 	_, err := s.Gauge(ctx, "nope")
@@ -95,7 +95,7 @@ func TestPGMissingMetric(t *testing.T) {
 }
 
 func TestPGSnapshot(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	s := newPGStorage(t)
 
 	require.NoError(t, s.UpdateGauge(ctx, "Alloc", 13.5))
@@ -109,7 +109,7 @@ func TestPGSnapshot(t *testing.T) {
 }
 
 func TestPGSameNameDifferentTypes(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	s := newPGStorage(t)
 
 	require.NoError(t, s.UpdateGauge(ctx, "Same", 1.5))
@@ -125,7 +125,7 @@ func TestPGSameNameDifferentTypes(t *testing.T) {
 }
 
 func TestPGUpdateBatchWithDuplicates(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	s := newPGStorage(t)
 
 	batch := []models.Metrics{
@@ -146,7 +146,7 @@ func TestPGUpdateBatchWithDuplicates(t *testing.T) {
 }
 
 func TestPGUpdateBatchEmpty(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	s := newPGStorage(t)
 
 	require.NoError(t, s.UpdateBatch(ctx, nil))
@@ -158,7 +158,7 @@ func TestPGUpdateBatchEmpty(t *testing.T) {
 }
 
 func TestPGUpdateBatchRollsBackOnError(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	s := newPGStorage(t)
 
 	batch := []models.Metrics{
@@ -175,7 +175,7 @@ func TestPGMigrationsAreIdempotent(t *testing.T) {
 	newPGStorage(t)
 
 	db := openTestDB(t)
-	_, err := NewPGStorage(context.Background(), db, zap.NewNop())
+	_, err := NewPGStorage(t.Context(), db, zap.NewNop())
 	assert.NoError(t, err, "повторный запуск миграций не должен быть ошибкой")
 }
 
@@ -191,6 +191,7 @@ func TestRetriablePG(t *testing.T) {
 		{"сбой сериализации", &pgconn.PgError{Code: pgerrcode.SerializationFailure}, true},
 		{"база ещё не принимает соединения", &pgconn.PgError{Code: pgerrcode.CannotConnectNow}, true},
 		{"база выключена администратором", &pgconn.PgError{Code: pgerrcode.AdminShutdown}, true},
+		{"нет свободных подключений", &pgconn.PgError{Code: pgerrcode.TooManyConnections}, true},
 		{"нарушение уникальности", &pgconn.PgError{Code: pgerrcode.UniqueViolation}, false},
 		{"значение не влезло в колонку", &pgconn.PgError{Code: pgerrcode.StringDataRightTruncationDataException}, false},
 		{"запрос отменён", &pgconn.PgError{Code: pgerrcode.QueryCanceled}, false},

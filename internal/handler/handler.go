@@ -93,7 +93,7 @@ func (h *MetricsHandler) Value(w http.ResponseWriter, r *http.Request) {
 
 func (h *MetricsHandler) storeFailed(w http.ResponseWriter, err error) {
 	h.log.Warn("не сохранил метрику", zap.Error(err))
-	http.Error(w, "не сохранил метрику", http.StatusInternalServerError)
+	http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 }
 
 func (h *MetricsHandler) readFailed(w http.ResponseWriter, r *http.Request, err error) {
@@ -102,7 +102,7 @@ func (h *MetricsHandler) readFailed(w http.ResponseWriter, r *http.Request, err 
 		return
 	}
 	h.log.Warn("не прочитал метрику", zap.Error(err))
-	http.Error(w, "не прочитал метрику", http.StatusInternalServerError)
+	http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 }
 
 type metricRow struct {
@@ -125,7 +125,7 @@ func (h *MetricsHandler) List(w http.ResponseWriter, r *http.Request) {
 	gauges, counters, err := h.store.Snapshot(r.Context())
 	if err != nil {
 		h.log.Warn("не прочитал метрики", zap.Error(err))
-		http.Error(w, "не прочитал метрики", http.StatusInternalServerError)
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
 
@@ -140,6 +140,7 @@ func (h *MetricsHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := listPage.Execute(w, rows); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		h.log.Warn("не отрисовал страницу метрик", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 	}
 }

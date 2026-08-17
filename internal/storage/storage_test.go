@@ -1,7 +1,6 @@
 package storage
 
 import (
-	"context"
 	"errors"
 	"sync"
 	"testing"
@@ -18,7 +17,7 @@ func counter(id string, d int64) models.Metrics {
 }
 
 func TestGaugeReplaces(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	s := NewMemStorage()
 	s.UpdateGauge(ctx, "Alloc", 100.5)
 	s.UpdateGauge(ctx, "Alloc", 42.1)
@@ -30,7 +29,7 @@ func TestGaugeReplaces(t *testing.T) {
 }
 
 func TestCounterAccumulates(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	s := NewMemStorage()
 	s.AddCounter(ctx, "PollCount", 5)
 	s.AddCounter(ctx, "PollCount", 3)
@@ -42,7 +41,7 @@ func TestCounterAccumulates(t *testing.T) {
 }
 
 func TestMissingMetric(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	s := NewMemStorage()
 
 	if _, err := s.Gauge(ctx, "nope"); !errors.Is(err, ErrNotFound) {
@@ -54,7 +53,7 @@ func TestMissingMetric(t *testing.T) {
 }
 
 func TestUpdateBatchWithDuplicates(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	s := NewMemStorage()
 
 	batch := []models.Metrics{
@@ -76,7 +75,7 @@ func TestUpdateBatchWithDuplicates(t *testing.T) {
 }
 
 func TestUpdateBatchEmpty(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	s := NewMemStorage()
 
 	if err := s.UpdateBatch(ctx, nil); err != nil {
@@ -90,7 +89,7 @@ func TestUpdateBatchEmpty(t *testing.T) {
 }
 
 func TestUpdateBatchSkipsMetricsWithoutValue(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	s := NewMemStorage()
 
 	batch := []models.Metrics{
@@ -111,7 +110,7 @@ func TestUpdateBatchSkipsMetricsWithoutValue(t *testing.T) {
 }
 
 func TestUpdateBatchConcurrent(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	s := NewMemStorage()
 
 	var wg sync.WaitGroup
@@ -132,7 +131,7 @@ func TestUpdateBatchConcurrent(t *testing.T) {
 }
 
 func TestSnapshotIsCopy(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	s := NewMemStorage()
 	s.UpdateGauge(ctx, "A", 1)
 

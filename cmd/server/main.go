@@ -47,6 +47,8 @@ func run(logger *zap.Logger) error {
 	storeLog := logger.With(zap.String("component", "storage"))
 
 	var db *sql.DB
+	var pinger handler.Pinger
+
 	if cfg.DatabaseDSN != "" {
 		opened, err := sql.Open("pgx", cfg.DatabaseDSN)
 		if err != nil {
@@ -57,6 +59,7 @@ func run(logger *zap.Logger) error {
 			opened.SetConnMaxIdleTime(4 * time.Minute)
 
 			db = opened
+			pinger = opened
 		}
 	}
 	defer func() {
@@ -65,7 +68,6 @@ func run(logger *zap.Logger) error {
 		}
 	}()
 
-	var pinger handler.Pinger
 	var repo storage.Repository
 	var files *storage.FileStore
 
@@ -73,11 +75,8 @@ func run(logger *zap.Logger) error {
 		pg, err := storage.NewPGStorage(ctx, db, storeLog)
 		if err != nil {
 			logger.Warn("не подготовил хранилище в базе", zap.Error(err))
-			db.Close()
-			db = nil
 		} else {
 			repo = pg
-			pinger = db
 			logger.Info("метрики хранятся в базе данных")
 		}
 	}

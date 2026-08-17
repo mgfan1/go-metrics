@@ -1,0 +1,15 @@
+with-expecter: false
+resolve-type-alias: false
+issue-845-fix: true
+disable-version-string: true
+dir: "{{.InterfaceDir}}/mocks"
+outpkg: mocks
+mockname: "{{.InterfaceName}}"
+filename: "{{.InterfaceName}}.go"
+packages:
+  github.com/mgfan1/go-metrics/internal/handler:
+    interfaces:
+      Pinger:
+  github.com/mgfan1/go-metrics/internal/storage:
+    interfaces:
+      Repository:

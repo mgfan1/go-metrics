@@ -28,6 +28,7 @@ type Agent struct {
 	gauges         map[string]float64
 	pollCount      int64
 	log            *zap.Logger
+	retrier        *retry.Retrier
 }
 
 func New(serverAddr string, poll, report time.Duration, log *zap.Logger) *Agent {
@@ -38,6 +39,7 @@ func New(serverAddr string, poll, report time.Duration, log *zap.Logger) *Agent 
 		client:         &http.Client{Timeout: 5 * time.Second},
 		gauges:         make(map[string]float64),
 		log:            log,
+		retrier:        retry.New(log),
 	}
 }
 
@@ -108,7 +110,7 @@ func (a *Agent) report(ctx context.Context) {
 	}
 	batch = append(batch, models.Metrics{ID: "PollCount", MType: models.Counter, Delta: &delta})
 
-	err := retry.Do(ctx, a.log, retriableSend, func() error { return a.send(ctx, batch) })
+	err := a.retrier.Do(ctx, retriableSend, func() error { return a.send(ctx, batch) })
 	if err != nil {
 		a.log.Warn("не отправил метрики", zap.Int("count", len(batch)), zap.Error(err))
 		return
