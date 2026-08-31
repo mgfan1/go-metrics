@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"context"
+	"errors"
 	"html/template"
 	"net/http"
 	"sort"
@@ -13,13 +15,18 @@ import (
 	"github.com/mgfan1/go-metrics/internal/storage"
 )
 
+type Pinger interface {
+	PingContext(ctx context.Context) error
+}
+
 type MetricsHandler struct {
 	store storage.Repository
+	db    Pinger
 	log   *zap.Logger
 }
 
-func New(store storage.Repository, log *zap.Logger) *MetricsHandler {
-	return &MetricsHandler{store: store, log: log}
+func New(store storage.Repository, db Pinger, log *zap.Logger) *MetricsHandler {
+	return &MetricsHandler{store: store, db: db, log: log}
 }
 
 func (h *MetricsHandler) Update(w http.ResponseWriter, r *http.Request) {
@@ -37,14 +44,20 @@ func (h *MetricsHandler) Update(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "gauge должен быть числом", http.StatusBadRequest)
 			return
 		}
-		h.store.UpdateGauge(name, v)
+		if err := h.store.UpdateGauge(r.Context(), name, v); err != nil {
+			h.storeFailed(w, err)
+			return
+		}
 	case models.Counter:
 		v, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil {
 			http.Error(w, "counter должен быть целым", http.StatusBadRequest)
 			return
 		}
-		h.store.AddCounter(name, v)
+		if err := h.store.AddCounter(r.Context(), name, v); err != nil {
+			h.storeFailed(w, err)
+			return
+		}
 	default:
 		http.Error(w, "неизвестный тип метрики", http.StatusBadRequest)
 		return
@@ -60,22 +73,36 @@ func (h *MetricsHandler) Value(w http.ResponseWriter, r *http.Request) {
 
 	switch chi.URLParam(r, "type") {
 	case models.Gauge:
-		v, ok := h.store.Gauge(name)
-		if !ok {
-			http.NotFound(w, r)
+		v, err := h.store.Gauge(r.Context(), name)
+		if err != nil {
+			h.readFailed(w, r, err)
 			return
 		}
 		_, _ = w.Write([]byte(strconv.FormatFloat(v, 'f', -1, 64)))
 	case models.Counter:
-		v, ok := h.store.Counter(name)
-		if !ok {
-			http.NotFound(w, r)
+		v, err := h.store.Counter(r.Context(), name)
+		if err != nil {
+			h.readFailed(w, r, err)
 			return
 		}
 		_, _ = w.Write([]byte(strconv.FormatInt(v, 10)))
 	default:
 		http.Error(w, "неизвестный тип метрики", http.StatusBadRequest)
 	}
+}
+
+func (h *MetricsHandler) storeFailed(w http.ResponseWriter, err error) {
+	h.log.Warn("не сохранил метрику", zap.Error(err))
+	http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+}
+
+func (h *MetricsHandler) readFailed(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, storage.ErrNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	h.log.Warn("не прочитал метрику", zap.Error(err))
+	http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 }
 
 type metricRow struct {
@@ -94,8 +121,13 @@ var listPage = template.Must(template.New("list").Parse(
 </body>
 </html>`))
 
-func (h *MetricsHandler) List(w http.ResponseWriter, _ *http.Request) {
-	gauges, counters := h.store.Snapshot()
+func (h *MetricsHandler) List(w http.ResponseWriter, r *http.Request) {
+	gauges, counters, err := h.store.Snapshot(r.Context())
+	if err != nil {
+		h.log.Warn("не прочитал метрики", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
 
 	rows := make([]metricRow, 0, len(gauges)+len(counters))
 	for name, v := range gauges {
@@ -108,6 +140,7 @@ func (h *MetricsHandler) List(w http.ResponseWriter, _ *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := listPage.Execute(w, rows); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		h.log.Warn("не отрисовал страницу метрик", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 	}
 }

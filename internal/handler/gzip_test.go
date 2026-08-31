@@ -31,7 +31,8 @@ func TestGzipResponse(t *testing.T) {
 	ts := newTestServer(t)
 	defer ts.Close()
 
-	postJSON(t, ts, "/update/", `{"id":"Alloc","type":"gauge","value":13.5}`)
+	seed, _ := postJSON(t, ts, "/update/", `{"id":"Alloc","type":"gauge","value":13.5}`)
+	defer seed.Body.Close()
 
 	req, err := http.NewRequest(http.MethodPost, ts.URL+"/value/",
 		strings.NewReader(`{"id":"Alloc","type":"gauge"}`))
@@ -69,7 +70,8 @@ func TestGzipRequest(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
-	_, body := postJSON(t, ts, "/value/", `{"id":"Alloc","type":"gauge"}`)
+	resp, body := postJSON(t, ts, "/value/", `{"id":"Alloc","type":"gauge"}`)
+	defer resp.Body.Close()
 	assert.Contains(t, body, `"value":77.5`)
 }
 
@@ -94,7 +96,8 @@ func TestGzipListPage(t *testing.T) {
 	ts := newTestServer(t)
 	defer ts.Close()
 
-	postJSON(t, ts, "/update/", `{"id":"Alloc","type":"gauge","value":1}`)
+	seed, _ := postJSON(t, ts, "/update/", `{"id":"Alloc","type":"gauge","value":1}`)
+	defer seed.Body.Close()
 
 	req, err := http.NewRequest(http.MethodGet, ts.URL+"/", nil)
 	require.NoError(t, err)

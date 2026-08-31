@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -48,7 +51,7 @@ func newCollector() (*httptest.Server, func() []captured) {
 	}
 }
 
-func unpack(t *testing.T, raw []byte) models.Metrics {
+func unpack(t *testing.T, raw []byte) []models.Metrics {
 	t.Helper()
 
 	zr, err := gzip.NewReader(bytes.NewReader(raw))
@@ -58,9 +61,9 @@ func unpack(t *testing.T, raw []byte) models.Metrics {
 	require.NoError(t, err, "gzip-поток оборван")
 	require.NoError(t, zr.Close())
 
-	var m models.Metrics
-	require.NoError(t, json.Unmarshal(body, &m))
-	return m
+	var batch []models.Metrics
+	require.NoError(t, json.Unmarshal(body, &batch))
+	return batch
 }
 
 func TestPoll(t *testing.T) {
@@ -85,15 +88,17 @@ func TestReport(t *testing.T) {
 
 	a := New(strings.TrimPrefix(srv.URL, "http://"), time.Second, time.Second, zap.NewNop())
 	a.poll()
-	a.report()
+	a.report(t.Context())
 
 	got := dump()
-	require.Len(t, got, 29)
+	require.Len(t, got, 1, "метрики должны уходить одним запросом")
+	assert.Equal(t, "/updates/", got[0].path)
 
-	names := make(map[string]models.Metrics, len(got))
-	for _, c := range got {
-		assert.Equal(t, "/update/", c.path)
-		m := unpack(t, c.raw)
+	batch := unpack(t, got[0].raw)
+	require.Len(t, batch, 29)
+
+	names := make(map[string]models.Metrics, len(batch))
+	for _, m := range batch {
 		names[m.ID] = m
 	}
 
@@ -117,19 +122,19 @@ func TestReportSendsGzip(t *testing.T) {
 
 	a := New(strings.TrimPrefix(srv.URL, "http://"), time.Second, time.Second, zap.NewNop())
 	a.poll()
-	a.report()
+	a.report(t.Context())
 
 	got := dump()
-	require.NotEmpty(t, got)
+	require.Len(t, got, 1)
 
-	for _, c := range got {
-		assert.Equal(t, "application/json", c.headers.Get("Content-Type"))
-		assert.Equal(t, "gzip", c.headers.Get("Content-Encoding"))
+	c := got[0]
+	assert.Equal(t, "application/json", c.headers.Get("Content-Type"))
+	assert.Equal(t, "gzip", c.headers.Get("Content-Encoding"))
 
-		require.GreaterOrEqual(t, len(c.raw), 2)
-		assert.Equal(t, []byte{0x1f, 0x8b}, c.raw[:2], "тело не сжато gzip")
+	require.GreaterOrEqual(t, len(c.raw), 2)
+	assert.Equal(t, []byte{0x1f, 0x8b}, c.raw[:2], "тело не сжато gzip")
 
-		m := unpack(t, c.raw)
+	for _, m := range unpack(t, c.raw) {
 		assert.NotEmpty(t, m.ID)
 	}
 }
@@ -154,7 +159,7 @@ func TestSendMetricPayload(t *testing.T) {
 			defer srv.Close()
 
 			a := New(strings.TrimPrefix(srv.URL, "http://"), time.Second, time.Second, zap.NewNop())
-			a.send(c.metric)
+			require.NoError(t, a.send(t.Context(), []models.Metrics{c.metric}))
 
 			got := dump()
 			require.Len(t, got, 1)
@@ -164,11 +169,12 @@ func TestSendMetricPayload(t *testing.T) {
 			body, err := io.ReadAll(zr)
 			require.NoError(t, err)
 
-			var fields map[string]any
+			var fields []map[string]any
 			require.NoError(t, json.Unmarshal(body, &fields))
+			require.Len(t, fields, 1)
 
-			assert.Contains(t, fields, c.present)
-			assert.NotContains(t, fields, c.absent)
+			assert.Contains(t, fields[0], c.present)
+			assert.NotContains(t, fields[0], c.absent)
 		})
 	}
 }
@@ -182,7 +188,7 @@ func TestReportResetsPollCount(t *testing.T) {
 	a := New(strings.TrimPrefix(srv.URL, "http://"), time.Second, time.Second, zap.NewNop())
 	a.poll()
 	a.poll()
-	a.report()
+	a.report(t.Context())
 
 	if a.pollCount != 0 {
 		t.Errorf("после report pollCount = %d, хотел 0", a.pollCount)
@@ -190,16 +196,34 @@ func TestReportResetsPollCount(t *testing.T) {
 }
 
 func TestReportKeepsPollCountOnFailure(t *testing.T) {
-	srv, _ := newCollector()
-	addr := strings.TrimPrefix(srv.URL, "http://")
-	srv.Close()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
 
-	a := New(addr, time.Second, time.Second, zap.NewNop())
+	a := New(strings.TrimPrefix(srv.URL, "http://"), time.Second, time.Second, zap.NewNop())
 	a.poll()
 	a.poll()
-	a.report()
+	a.report(t.Context())
 
-	assert.Equal(t, int64(2), a.pollCount, "при недоступном сервере счётчик опросов терять нельзя")
+	assert.Equal(t, int64(2), a.pollCount, "при ошибке отправки счётчик опросов терять нельзя")
+}
+
+func TestRetriableSend(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"сервер недоступен", &url.Error{Op: "Post", URL: "http://localhost:8080/updates/", Err: &net.OpError{Op: "dial", Err: errors.New("соединение отклонено")}}, true},
+		{"сервер ответил ошибкой", errors.New("сервер ответил 500 Internal Server Error"), false},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			assert.Equal(t, c.want, retriableSend(c.err))
+		})
+	}
 }
 
 func TestSendReturnsErrorOnBadStatus(t *testing.T) {
@@ -211,25 +235,27 @@ func TestSendReturnsErrorOnBadStatus(t *testing.T) {
 	value := 1.0
 	a := New(strings.TrimPrefix(srv.URL, "http://"), time.Second, time.Second, zap.NewNop())
 
-	err := a.send(models.Metrics{ID: "Alloc", MType: models.Gauge, Value: &value})
+	err := a.send(t.Context(), []models.Metrics{{ID: "Alloc", MType: models.Gauge, Value: &value}})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "500")
 }
 
 func TestAgentSendsToRealServer(t *testing.T) {
 	store := storage.NewMemStorage()
-	srv := httptest.NewServer(handler.New(store, zap.NewNop()).Router(zap.NewNop()))
+	srv := httptest.NewServer(handler.New(store, nil, zap.NewNop()).Router(zap.NewNop()))
 	defer srv.Close()
 
 	a := New(strings.TrimPrefix(srv.URL, "http://"), time.Second, time.Second, zap.NewNop())
 	a.poll()
-	a.report()
+	a.report(t.Context())
 
-	v, ok := store.Gauge("Alloc")
-	require.True(t, ok, "сервер не сохранил Alloc")
+	ctx := t.Context()
+
+	v, err := store.Gauge(ctx, "Alloc")
+	require.NoError(t, err, "сервер не сохранил Alloc")
 	assert.Positive(t, v)
 
-	d, ok := store.Counter("PollCount")
-	require.True(t, ok, "сервер не сохранил PollCount")
+	d, err := store.Counter(ctx, "PollCount")
+	require.NoError(t, err, "сервер не сохранил PollCount")
 	assert.Equal(t, int64(1), d)
 }

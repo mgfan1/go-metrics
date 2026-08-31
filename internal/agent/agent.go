@@ -3,10 +3,13 @@ package agent
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
+	"net"
 	"net/http"
 	"runtime"
 	"time"
@@ -14,6 +17,7 @@ import (
 	"go.uber.org/zap"
 
 	models "github.com/mgfan1/go-metrics/internal/model"
+	"github.com/mgfan1/go-metrics/internal/retry"
 )
 
 type Agent struct {
@@ -24,6 +28,7 @@ type Agent struct {
 	gauges         map[string]float64
 	pollCount      int64
 	log            *zap.Logger
+	retrier        *retry.Retrier
 }
 
 func New(serverAddr string, poll, report time.Duration, log *zap.Logger) *Agent {
@@ -34,21 +39,28 @@ func New(serverAddr string, poll, report time.Duration, log *zap.Logger) *Agent 
 		client:         &http.Client{Timeout: 5 * time.Second},
 		gauges:         make(map[string]float64),
 		log:            log,
+		retrier:        retry.New(log),
 	}
 }
 
-func (a *Agent) Run() {
+func (a *Agent) Run(ctx context.Context) {
 	pollTicker := time.NewTicker(a.pollInterval)
 	reportTicker := time.NewTicker(a.reportInterval)
 	defer pollTicker.Stop()
 	defer reportTicker.Stop()
 
 	for {
+		if ctx.Err() != nil {
+			return
+		}
+
 		select {
+		case <-ctx.Done():
+			return
 		case <-pollTicker.C:
 			a.poll()
 		case <-reportTicker.C:
-			a.report()
+			a.report(ctx)
 		}
 	}
 }
@@ -89,23 +101,30 @@ func (a *Agent) poll() {
 	a.pollCount++
 }
 
-func (a *Agent) report() {
-	for name, value := range a.gauges {
-		if err := a.send(models.Metrics{ID: name, MType: models.Gauge, Value: &value}); err != nil {
-			a.log.Warn("не отправил метрику", zap.String("id", name), zap.Error(err))
-		}
-	}
-
+func (a *Agent) report(ctx context.Context) {
 	delta := a.pollCount
-	if err := a.send(models.Metrics{ID: "PollCount", MType: models.Counter, Delta: &delta}); err != nil {
-		a.log.Warn("не отправил метрику", zap.String("id", "PollCount"), zap.Error(err))
+
+	batch := make([]models.Metrics, 0, len(a.gauges)+1)
+	for name, value := range a.gauges {
+		batch = append(batch, models.Metrics{ID: name, MType: models.Gauge, Value: &value})
+	}
+	batch = append(batch, models.Metrics{ID: "PollCount", MType: models.Counter, Delta: &delta})
+
+	err := a.retrier.Do(ctx, retriableSend, func() error { return a.send(ctx, batch) })
+	if err != nil {
+		a.log.Warn("не отправил метрики", zap.Int("count", len(batch)), zap.Error(err))
 		return
 	}
 	a.pollCount -= delta
 }
 
-func (a *Agent) send(m models.Metrics) error {
-	body, err := json.Marshal(m)
+func retriableSend(err error) bool {
+	var netErr net.Error
+	return errors.As(err, &netErr)
+}
+
+func (a *Agent) send(ctx context.Context, batch []models.Metrics) error {
+	body, err := json.Marshal(batch)
 	if err != nil {
 		return err
 	}
@@ -119,7 +138,7 @@ func (a *Agent) send(m models.Metrics) error {
 		return err
 	}
 
-	req, err := http.NewRequest(http.MethodPost, a.baseURL+"/update/", &buf)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.baseURL+"/updates/", &buf)
 	if err != nil {
 		return err
 	}

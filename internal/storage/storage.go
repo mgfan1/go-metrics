@@ -1,13 +1,22 @@
 package storage
 
-import "sync"
+import (
+	"context"
+	"errors"
+	"sync"
+
+	models "github.com/mgfan1/go-metrics/internal/model"
+)
+
+var ErrNotFound = errors.New("метрика не найдена")
 
 type Repository interface {
-	UpdateGauge(name string, value float64)
-	AddCounter(name string, delta int64)
-	Gauge(name string) (float64, bool)
-	Counter(name string) (int64, bool)
-	Snapshot() (gauges map[string]float64, counters map[string]int64)
+	UpdateGauge(ctx context.Context, name string, value float64) error
+	AddCounter(ctx context.Context, name string, delta int64) error
+	UpdateBatch(ctx context.Context, metrics []models.Metrics) error
+	Gauge(ctx context.Context, name string) (float64, error)
+	Counter(ctx context.Context, name string) (int64, error)
+	Snapshot(ctx context.Context) (gauges map[string]float64, counters map[string]int64, err error)
 }
 
 type MemStorage struct {
@@ -23,33 +32,63 @@ func NewMemStorage() *MemStorage {
 	}
 }
 
-func (s *MemStorage) UpdateGauge(name string, value float64) {
+func (s *MemStorage) UpdateGauge(_ context.Context, name string, value float64) error {
 	s.mu.Lock()
 	s.gauges[name] = value
 	s.mu.Unlock()
+	return nil
 }
 
-func (s *MemStorage) AddCounter(name string, delta int64) {
+func (s *MemStorage) AddCounter(_ context.Context, name string, delta int64) error {
 	s.mu.Lock()
 	s.counters[name] += delta
 	s.mu.Unlock()
+	return nil
 }
 
-func (s *MemStorage) Gauge(name string) (float64, bool) {
+func (s *MemStorage) UpdateBatch(_ context.Context, metrics []models.Metrics) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, m := range metrics {
+		switch m.MType {
+		case models.Gauge:
+			if m.Value != nil {
+				s.gauges[m.ID] = *m.Value
+			}
+		case models.Counter:
+			if m.Delta != nil {
+				s.counters[m.ID] += *m.Delta
+			}
+		}
+	}
+
+	return nil
+}
+
+func (s *MemStorage) Gauge(_ context.Context, name string) (float64, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+
 	v, ok := s.gauges[name]
-	return v, ok
+	if !ok {
+		return 0, ErrNotFound
+	}
+	return v, nil
 }
 
-func (s *MemStorage) Counter(name string) (int64, bool) {
+func (s *MemStorage) Counter(_ context.Context, name string) (int64, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+
 	v, ok := s.counters[name]
-	return v, ok
+	if !ok {
+		return 0, ErrNotFound
+	}
+	return v, nil
 }
 
-func (s *MemStorage) Snapshot() (map[string]float64, map[string]int64) {
+func (s *MemStorage) Snapshot(_ context.Context) (map[string]float64, map[string]int64, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -61,5 +100,5 @@ func (s *MemStorage) Snapshot() (map[string]float64, map[string]int64) {
 	for k, v := range s.counters {
 		counters[k] = v
 	}
-	return gauges, counters
+	return gauges, counters, nil
 }

@@ -1,12 +1,15 @@
 package storage
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
 
 	"go.uber.org/zap"
+
+	models "github.com/mgfan1/go-metrics/internal/model"
 )
 
 func newFileStore(t *testing.T, repo Repository, path string, restore bool) *FileStore {
@@ -20,45 +23,48 @@ func newFileStore(t *testing.T, repo Repository, path string, restore bool) *Fil
 }
 
 func TestSaveThenLoad(t *testing.T) {
+	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "metrics.json")
 
 	src := NewMemStorage()
-	src.UpdateGauge("Alloc", 42.5)
-	src.AddCounter("PollCount", 7)
+	src.UpdateGauge(ctx, "Alloc", 42.5)
+	src.AddCounter(ctx, "PollCount", 7)
 
-	if err := newFileStore(t, src, path, false).save(); err != nil {
+	if err := newFileStore(t, src, path, false).save(ctx); err != nil {
 		t.Fatalf("save: %v", err)
 	}
 
 	dst := NewMemStorage()
 	newFileStore(t, dst, path, true)
 
-	if v, ok := dst.Gauge("Alloc"); !ok || v != 42.5 {
-		t.Errorf("gauge = %v, %v; хотел 42.5, true", v, ok)
+	if v, err := dst.Gauge(ctx, "Alloc"); err != nil || v != 42.5 {
+		t.Errorf("gauge = %v, %v; хотел 42.5, nil", v, err)
 	}
-	if v, ok := dst.Counter("PollCount"); !ok || v != 7 {
-		t.Errorf("counter = %v, %v; хотел 7, true", v, ok)
+	if v, err := dst.Counter(ctx, "PollCount"); err != nil || v != 7 {
+		t.Errorf("counter = %v, %v; хотел 7, nil", v, err)
 	}
 }
 
 func TestRestoreDisabled(t *testing.T) {
+	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "metrics.json")
 
 	src := NewMemStorage()
-	src.UpdateGauge("Alloc", 42.5)
-	if err := newFileStore(t, src, path, false).save(); err != nil {
+	src.UpdateGauge(ctx, "Alloc", 42.5)
+	if err := newFileStore(t, src, path, false).save(ctx); err != nil {
 		t.Fatal(err)
 	}
 
 	dst := NewMemStorage()
 	newFileStore(t, dst, path, false)
 
-	if _, ok := dst.Gauge("Alloc"); ok {
+	if _, err := dst.Gauge(ctx, "Alloc"); !errors.Is(err, ErrNotFound) {
 		t.Error("при restore=false метрики загружаться не должны")
 	}
 }
 
 func TestLoadMissingFile(t *testing.T) {
+	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "нет-такого.json")
 
 	store := NewMemStorage()
@@ -66,7 +72,10 @@ func TestLoadMissingFile(t *testing.T) {
 		t.Errorf("отсутствие файла не должно быть ошибкой: %v", err)
 	}
 
-	gauges, counters := store.Snapshot()
+	gauges, counters, err := store.Snapshot(ctx)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
 	if len(gauges) != 0 || len(counters) != 0 {
 		t.Error("хранилище должно остаться пустым")
 	}
@@ -84,34 +93,36 @@ func TestLoadCorruptedFile(t *testing.T) {
 }
 
 func TestSaveOverwrites(t *testing.T) {
+	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "metrics.json")
 
 	store := NewMemStorage()
 	files := newFileStore(t, store, path, false)
 
-	store.UpdateGauge("Alloc", 1)
-	if err := files.save(); err != nil {
+	store.UpdateGauge(ctx, "Alloc", 1)
+	if err := files.save(ctx); err != nil {
 		t.Fatal(err)
 	}
 
-	store.UpdateGauge("Alloc", 2)
-	if err := files.save(); err != nil {
+	store.UpdateGauge(ctx, "Alloc", 2)
+	if err := files.save(ctx); err != nil {
 		t.Fatal(err)
 	}
 
 	dst := NewMemStorage()
 	newFileStore(t, dst, path, true)
 
-	if v, _ := dst.Gauge("Alloc"); v != 2 {
+	if v, _ := dst.Gauge(ctx, "Alloc"); v != 2 {
 		t.Errorf("gauge = %v, хотел 2: старое значение не перезаписано", v)
 	}
 }
 
 func TestCloseSavesMetrics(t *testing.T) {
+	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "metrics.json")
 
 	store := NewMemStorage()
-	store.UpdateGauge("Alloc", 8.25)
+	store.UpdateGauge(ctx, "Alloc", 8.25)
 
 	if err := newFileStore(t, store, path, false).Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -120,26 +131,51 @@ func TestCloseSavesMetrics(t *testing.T) {
 	dst := NewMemStorage()
 	newFileStore(t, dst, path, true)
 
-	if v, ok := dst.Gauge("Alloc"); !ok || v != 8.25 {
-		t.Errorf("gauge = %v, %v; Close не сохранил метрики", v, ok)
+	if v, err := dst.Gauge(ctx, "Alloc"); err != nil || v != 8.25 {
+		t.Errorf("gauge = %v, %v; Close не сохранил метрики", v, err)
 	}
 }
 
 func TestSyncRepositorySavesOnWrite(t *testing.T) {
+	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "metrics.json")
 
 	repo := newFileStore(t, NewMemStorage(), path, false).SyncRepository()
-	repo.UpdateGauge("Alloc", 3.5)
+	if err := repo.UpdateGauge(ctx, "Alloc", 3.5); err != nil {
+		t.Fatalf("UpdateGauge: %v", err)
+	}
 
 	dst := NewMemStorage()
 	newFileStore(t, dst, path, true)
 
-	if v, ok := dst.Gauge("Alloc"); !ok || v != 3.5 {
-		t.Errorf("gauge = %v, %v; синхронная запись не сработала", v, ok)
+	if v, err := dst.Gauge(ctx, "Alloc"); err != nil || v != 3.5 {
+		t.Errorf("gauge = %v, %v; синхронная запись не сработала", v, err)
+	}
+}
+
+func TestSyncRepositorySavesBatch(t *testing.T) {
+	ctx := t.Context()
+	path := filepath.Join(t.TempDir(), "metrics.json")
+
+	repo := newFileStore(t, NewMemStorage(), path, false).SyncRepository()
+	batch := []models.Metrics{counter("PollCount", 5), gauge("Alloc", 1.5), counter("PollCount", 3)}
+	if err := repo.UpdateBatch(ctx, batch); err != nil {
+		t.Fatalf("UpdateBatch: %v", err)
+	}
+
+	dst := NewMemStorage()
+	newFileStore(t, dst, path, true)
+
+	if v, err := dst.Gauge(ctx, "Alloc"); err != nil || v != 1.5 {
+		t.Errorf("gauge = %v, %v; батч не сохранён на диск", v, err)
+	}
+	if v, err := dst.Counter(ctx, "PollCount"); err != nil || v != 8 {
+		t.Errorf("counter = %v, %v; хотел 8, nil", v, err)
 	}
 }
 
 func TestConcurrentSaveKeepsFileValid(t *testing.T) {
+	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "metrics.json")
 
 	repo := newFileStore(t, NewMemStorage(), path, false).SyncRepository()
@@ -150,7 +186,7 @@ func TestConcurrentSaveKeepsFileValid(t *testing.T) {
 		go func(n int) {
 			defer wg.Done()
 			for j := 0; j < 20; j++ {
-				repo.UpdateGauge("Alloc", float64(n*1000+j))
+				repo.UpdateGauge(ctx, "Alloc", float64(n*1000+j))
 			}
 		}(i)
 	}
@@ -160,14 +196,14 @@ func TestConcurrentSaveKeepsFileValid(t *testing.T) {
 	if _, err := NewFileStore(dst, path, true, zap.NewNop()); err != nil {
 		t.Fatalf("файл повреждён параллельной записью: %v", err)
 	}
-	if _, ok := dst.Gauge("Alloc"); !ok {
-		t.Error("после параллельных записей метрика потерялась")
+	if _, err := dst.Gauge(ctx, "Alloc"); err != nil {
+		t.Errorf("после параллельных записей метрика потерялась: %v", err)
 	}
 }
 
 func TestEmptyPathDoesNothing(t *testing.T) {
 	store := NewMemStorage()
-	store.UpdateGauge("Alloc", 1)
+	store.UpdateGauge(t.Context(), "Alloc", 1)
 
 	files := newFileStore(t, store, "", true)
 	if err := files.Close(); err != nil {

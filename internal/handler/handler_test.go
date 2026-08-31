@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -8,15 +9,17 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
 	"github.com/mgfan1/go-metrics/internal/storage"
+	"github.com/mgfan1/go-metrics/internal/storage/mocks"
 )
 
 func newTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
-	h := New(storage.NewMemStorage(), zap.NewNop())
+	h := New(storage.NewMemStorage(), nil, zap.NewNop())
 	return httptest.NewServer(h.Router(zap.NewNop()))
 }
 
@@ -84,6 +87,58 @@ func TestUpdateThenRead(t *testing.T) {
 
 	code, _ = do(t, ts, http.MethodGet, "/value/gauge/Unknown")
 	assert.Equal(t, http.StatusNotFound, code)
+}
+
+func TestStorageErrorGivesServerError(t *testing.T) {
+	boom := errors.New("база упала")
+
+	cases := []struct {
+		name   string
+		method string
+		path   string
+		expect func(*mocks.Repository)
+	}{
+		{"запись gauge", http.MethodPost, "/update/gauge/Alloc/1", func(s *mocks.Repository) {
+			s.On("UpdateGauge", mock.Anything, "Alloc", 1.0).Return(boom)
+		}},
+		{"запись counter", http.MethodPost, "/update/counter/PollCount/1", func(s *mocks.Repository) {
+			s.On("AddCounter", mock.Anything, "PollCount", int64(1)).Return(boom)
+		}},
+		{"чтение gauge", http.MethodGet, "/value/gauge/Alloc", func(s *mocks.Repository) {
+			s.On("Gauge", mock.Anything, "Alloc").Return(0.0, boom)
+		}},
+		{"чтение counter", http.MethodGet, "/value/counter/PollCount", func(s *mocks.Repository) {
+			s.On("Counter", mock.Anything, "PollCount").Return(int64(0), boom)
+		}},
+		{"список метрик", http.MethodGet, "/", func(s *mocks.Repository) {
+			s.On("Snapshot", mock.Anything).Return(nil, nil, boom)
+		}},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			store := mocks.NewRepository(t)
+			c.expect(store)
+
+			ts := httptest.NewServer(New(store, nil, zap.NewNop()).Router(zap.NewNop()))
+			defer ts.Close()
+
+			code, _ := do(t, ts, c.method, c.path)
+			assert.Equal(t, http.StatusInternalServerError, code)
+		})
+	}
+}
+
+func TestBatchStorageErrorGivesServerError(t *testing.T) {
+	store := mocks.NewRepository(t)
+	store.On("UpdateBatch", mock.Anything, mock.Anything).Return(errors.New("база упала"))
+
+	ts := httptest.NewServer(New(store, nil, zap.NewNop()).Router(zap.NewNop()))
+	defer ts.Close()
+
+	resp, _ := postJSON(t, ts, "/updates/", `[{"id":"Alloc","type":"gauge","value":1.5}]`)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 }
 
 func TestListPage(t *testing.T) {

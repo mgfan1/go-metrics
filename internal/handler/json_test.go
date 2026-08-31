@@ -51,6 +51,7 @@ func TestUpdateJSON(t *testing.T) {
 			defer ts.Close()
 
 			resp, _ := postJSON(t, ts, "/update/", c.body)
+			defer resp.Body.Close()
 			assert.Equal(t, c.want, resp.StatusCode)
 			if c.want == http.StatusOK {
 				assert.Contains(t, resp.Header.Get("Content-Type"), "application/json")
@@ -63,7 +64,8 @@ func TestUpdateJSONReturnsMetric(t *testing.T) {
 	ts := newTestServer(t)
 	defer ts.Close()
 
-	_, body := postJSON(t, ts, "/update/", `{"id":"Alloc","type":"gauge","value":13.5}`)
+	resp, body := postJSON(t, ts, "/update/", `{"id":"Alloc","type":"gauge","value":13.5}`)
+	defer resp.Body.Close()
 
 	var m models.Metrics
 	require.NoError(t, json.Unmarshal([]byte(body), &m))
@@ -76,8 +78,11 @@ func TestUpdateJSONCounterAccumulates(t *testing.T) {
 	ts := newTestServer(t)
 	defer ts.Close()
 
-	postJSON(t, ts, "/update/", `{"id":"PollCount","type":"counter","delta":5}`)
-	_, body := postJSON(t, ts, "/update/", `{"id":"PollCount","type":"counter","delta":3}`)
+	first, _ := postJSON(t, ts, "/update/", `{"id":"PollCount","type":"counter","delta":5}`)
+	defer first.Body.Close()
+
+	resp, body := postJSON(t, ts, "/update/", `{"id":"PollCount","type":"counter","delta":3}`)
+	defer resp.Body.Close()
 
 	var m models.Metrics
 	require.NoError(t, json.Unmarshal([]byte(body), &m))
@@ -89,9 +94,11 @@ func TestValueJSON(t *testing.T) {
 	ts := newTestServer(t)
 	defer ts.Close()
 
-	postJSON(t, ts, "/update/", `{"id":"Alloc","type":"gauge","value":42.1}`)
+	seed, _ := postJSON(t, ts, "/update/", `{"id":"Alloc","type":"gauge","value":42.1}`)
+	defer seed.Body.Close()
 
 	resp, body := postJSON(t, ts, "/value/", `{"id":"Alloc","type":"gauge"}`)
+	defer resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Contains(t, resp.Header.Get("Content-Type"), "application/json")
 
@@ -102,9 +109,11 @@ func TestValueJSON(t *testing.T) {
 	assert.Nil(t, m.Delta)
 
 	resp, _ = postJSON(t, ts, "/value/", `{"id":"Unknown","type":"gauge"}`)
+	defer resp.Body.Close()
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 
 	resp, _ = postJSON(t, ts, "/value/", `{"id":"Alloc","type":"summary"}`)
+	defer resp.Body.Close()
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
 
@@ -115,7 +124,8 @@ func TestJSONAndPlainShareStorage(t *testing.T) {
 	code, _ := do(t, ts, http.MethodPost, "/update/gauge/Alloc/42.1")
 	require.Equal(t, http.StatusOK, code)
 
-	_, body := postJSON(t, ts, "/value/", `{"id":"Alloc","type":"gauge"}`)
+	resp, body := postJSON(t, ts, "/value/", `{"id":"Alloc","type":"gauge"}`)
+	defer resp.Body.Close()
 
 	var m models.Metrics
 	require.NoError(t, json.Unmarshal([]byte(body), &m))
@@ -128,5 +138,6 @@ func TestUpdateJSONWithoutTrailingSlash(t *testing.T) {
 	defer ts.Close()
 
 	resp, _ := postJSON(t, ts, "/update", `{"id":"Alloc","type":"gauge","value":1}`)
+	defer resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
