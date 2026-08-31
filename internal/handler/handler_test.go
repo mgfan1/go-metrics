@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -84,6 +86,48 @@ func TestUpdateThenRead(t *testing.T) {
 
 	code, _ = do(t, ts, http.MethodGet, "/value/gauge/Unknown")
 	assert.Equal(t, http.StatusNotFound, code)
+}
+
+type brokenStore struct {
+	storage.Repository
+	err error
+}
+
+func (s brokenStore) UpdateGauge(context.Context, string, float64) error { return s.err }
+
+func (s brokenStore) AddCounter(context.Context, string, int64) error { return s.err }
+
+func (s brokenStore) Gauge(context.Context, string) (float64, error) { return 0, s.err }
+
+func (s brokenStore) Counter(context.Context, string) (int64, error) { return 0, s.err }
+
+func (s brokenStore) Snapshot(context.Context) (map[string]float64, map[string]int64, error) {
+	return nil, nil, s.err
+}
+
+func TestStorageErrorGivesServerError(t *testing.T) {
+	store := brokenStore{Repository: storage.NewMemStorage(), err: errors.New("база упала")}
+	ts := httptest.NewServer(New(store, nil, zap.NewNop()).Router(zap.NewNop()))
+	defer ts.Close()
+
+	cases := []struct {
+		name   string
+		method string
+		path   string
+	}{
+		{"запись gauge", http.MethodPost, "/update/gauge/Alloc/1"},
+		{"запись counter", http.MethodPost, "/update/counter/PollCount/1"},
+		{"чтение gauge", http.MethodGet, "/value/gauge/Alloc"},
+		{"чтение counter", http.MethodGet, "/value/counter/PollCount"},
+		{"список метрик", http.MethodGet, "/"},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			code, _ := do(t, ts, c.method, c.path)
+			assert.Equal(t, http.StatusInternalServerError, code)
+		})
+	}
 }
 
 func TestListPage(t *testing.T) {

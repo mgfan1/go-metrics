@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -225,11 +226,13 @@ func TestAgentSendsToRealServer(t *testing.T) {
 	a.poll()
 	a.report()
 
-	v, ok := store.Gauge("Alloc")
-	require.True(t, ok, "сервер не сохранил Alloc")
+	ctx := context.Background()
+
+	v, err := store.Gauge(ctx, "Alloc")
+	require.NoError(t, err, "сервер не сохранил Alloc")
 	assert.Positive(t, v)
 
-	d, ok := store.Counter("PollCount")
-	require.True(t, ok, "сервер не сохранил PollCount")
+	d, err := store.Counter(ctx, "PollCount")
+	require.NoError(t, err, "сервер не сохранил PollCount")
 	assert.Equal(t, int64(1), d)
 }

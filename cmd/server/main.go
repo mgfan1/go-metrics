@@ -44,32 +44,56 @@ func run(logger *zap.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	store := storage.NewMemStorage()
-	files, err := storage.NewFileStore(store, cfg.FileStorage, cfg.Restore,
-		logger.With(zap.String("component", "storage")))
-	if err != nil {
-		logger.Warn("не восстановил метрики", zap.Error(err))
-	}
+	storeLog := logger.With(zap.String("component", "storage"))
 
-	var repo storage.Repository = store
-	if cfg.StoreInterval <= 0 {
-		repo = files.SyncRepository()
-	} else {
-		go files.RunPeriodic(ctx, time.Duration(cfg.StoreInterval)*time.Second)
-	}
-
-	var pinger handler.Pinger
+	var db *sql.DB
 	if cfg.DatabaseDSN != "" {
-		db, err := sql.Open("pgx", cfg.DatabaseDSN)
+		opened, err := sql.Open("pgx", cfg.DatabaseDSN)
 		if err != nil {
 			logger.Warn("не открыл соединение с базой", zap.Error(err))
 		} else {
-			db.SetMaxOpenConns(10)
-			db.SetMaxIdleConns(10)
-			db.SetConnMaxIdleTime(4 * time.Minute)
+			opened.SetMaxOpenConns(10)
+			opened.SetMaxIdleConns(10)
+			opened.SetConnMaxIdleTime(4 * time.Minute)
 
-			defer db.Close()
+			db = opened
+		}
+	}
+	defer func() {
+		if db != nil {
+			db.Close()
+		}
+	}()
+
+	var pinger handler.Pinger
+	var repo storage.Repository
+	var files *storage.FileStore
+
+	if db != nil {
+		pg, err := storage.NewPGStorage(db, storeLog)
+		if err != nil {
+			logger.Warn("не подготовил хранилище в базе", zap.Error(err))
+			db.Close()
+			db = nil
+		} else {
+			repo = pg
 			pinger = db
+			logger.Info("метрики хранятся в базе данных")
+		}
+	}
+
+	if repo == nil {
+		store := storage.NewMemStorage()
+		files, err = storage.NewFileStore(store, cfg.FileStorage, cfg.Restore, storeLog)
+		if err != nil {
+			logger.Warn("не восстановил метрики", zap.Error(err))
+		}
+
+		repo = store
+		if cfg.StoreInterval <= 0 {
+			repo = files.SyncRepository()
+		} else {
+			go files.RunPeriodic(ctx, time.Duration(cfg.StoreInterval)*time.Second)
 		}
 	}
 
@@ -81,10 +105,12 @@ func run(logger *zap.Logger) error {
 		return err
 	}
 
-	if err := files.Close(); err != nil {
-		return err
+	if files != nil {
+		if err := files.Close(); err != nil {
+			return err
+		}
+		logger.Info("метрики сохранены")
 	}
-	logger.Info("метрики сохранены")
 
 	return nil
 }

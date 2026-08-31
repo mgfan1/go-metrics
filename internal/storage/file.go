@@ -26,10 +26,10 @@ func NewFileStore(repo Repository, path string, restore bool, log *zap.Logger) (
 	if !restore {
 		return f, nil
 	}
-	return f, f.load()
+	return f, f.load(context.Background())
 }
 
-func (f *FileStore) load() error {
+func (f *FileStore) load(ctx context.Context) error {
 	if f.path == "" {
 		return nil
 	}
@@ -54,11 +54,15 @@ func (f *FileStore) load() error {
 		switch m.MType {
 		case models.Gauge:
 			if m.Value != nil {
-				f.repo.UpdateGauge(m.ID, *m.Value)
+				if err := f.repo.UpdateGauge(ctx, m.ID, *m.Value); err != nil {
+					return err
+				}
 			}
 		case models.Counter:
 			if m.Delta != nil {
-				f.repo.AddCounter(m.ID, *m.Delta)
+				if err := f.repo.AddCounter(ctx, m.ID, *m.Delta); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -66,7 +70,7 @@ func (f *FileStore) load() error {
 	return nil
 }
 
-func (f *FileStore) save() error {
+func (f *FileStore) save(ctx context.Context) error {
 	if f.path == "" {
 		return nil
 	}
@@ -74,7 +78,10 @@ func (f *FileStore) save() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	gauges, counters := f.repo.Snapshot()
+	gauges, counters, err := f.repo.Snapshot(ctx)
+	if err != nil {
+		return err
+	}
 
 	metrics := make([]models.Metrics, 0, len(gauges)+len(counters))
 	for name, v := range gauges {
@@ -104,7 +111,7 @@ func (f *FileStore) save() error {
 }
 
 func (f *FileStore) Close() error {
-	return f.save()
+	return f.save(context.Background())
 }
 
 func (f *FileStore) RunPeriodic(ctx context.Context, interval time.Duration) {
@@ -114,7 +121,7 @@ func (f *FileStore) RunPeriodic(ctx context.Context, interval time.Duration) {
 	for {
 		select {
 		case <-ticker.C:
-			if err := f.save(); err != nil {
+			if err := f.save(ctx); err != nil {
 				f.log.Warn("не сохранил метрики", zap.Error(err))
 			}
 		case <-ctx.Done():
@@ -133,18 +140,24 @@ func (f *FileStore) SyncRepository() Repository {
 	return &syncRepository{Repository: f.repo, file: f, log: f.log}
 }
 
-func (s *syncRepository) UpdateGauge(name string, value float64) {
-	s.Repository.UpdateGauge(name, value)
-	s.save()
+func (s *syncRepository) UpdateGauge(ctx context.Context, name string, value float64) error {
+	if err := s.Repository.UpdateGauge(ctx, name, value); err != nil {
+		return err
+	}
+	s.save(ctx)
+	return nil
 }
 
-func (s *syncRepository) AddCounter(name string, delta int64) {
-	s.Repository.AddCounter(name, delta)
-	s.save()
+func (s *syncRepository) AddCounter(ctx context.Context, name string, delta int64) error {
+	if err := s.Repository.AddCounter(ctx, name, delta); err != nil {
+		return err
+	}
+	s.save(ctx)
+	return nil
 }
 
-func (s *syncRepository) save() {
-	if err := s.file.save(); err != nil {
+func (s *syncRepository) save(ctx context.Context) {
+	if err := s.file.save(ctx); err != nil {
 		s.log.Warn("не сохранил метрики", zap.Error(err))
 	}
 }
