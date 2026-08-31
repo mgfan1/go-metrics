@@ -156,6 +156,14 @@ func (s *syncRepository) AddCounter(ctx context.Context, name string, delta int6
 	return nil
 }
 
+func (s *syncRepository) UpdateBatch(ctx context.Context, metrics []models.Metrics) error {
+	if err := s.Repository.UpdateBatch(ctx, metrics); err != nil {
+		return err
+	}
+	s.save(ctx)
+	return nil
+}
+
 func (s *syncRepository) save(ctx context.Context) {
 	if err := s.file.save(ctx); err != nil {
 		s.log.Warn("не сохранил метрики", zap.Error(err))

@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
+	models "github.com/mgfan1/go-metrics/internal/model"
 	"github.com/mgfan1/go-metrics/internal/storage"
 )
 
@@ -97,6 +98,8 @@ func (s brokenStore) UpdateGauge(context.Context, string, float64) error { retur
 
 func (s brokenStore) AddCounter(context.Context, string, int64) error { return s.err }
 
+func (s brokenStore) UpdateBatch(context.Context, []models.Metrics) error { return s.err }
+
 func (s brokenStore) Gauge(context.Context, string) (float64, error) { return 0, s.err }
 
 func (s brokenStore) Counter(context.Context, string) (int64, error) { return 0, s.err }
@@ -128,6 +131,15 @@ func TestStorageErrorGivesServerError(t *testing.T) {
 			assert.Equal(t, http.StatusInternalServerError, code)
 		})
 	}
+}
+
+func TestBatchStorageErrorGivesServerError(t *testing.T) {
+	store := brokenStore{Repository: storage.NewMemStorage(), err: errors.New("база упала")}
+	ts := httptest.NewServer(New(store, nil, zap.NewNop()).Router(zap.NewNop()))
+	defer ts.Close()
+
+	resp, _ := postJSON(t, ts, "/updates/", `[{"id":"Alloc","type":"gauge","value":1.5}]`)
+	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 }
 
 func TestListPage(t *testing.T) {

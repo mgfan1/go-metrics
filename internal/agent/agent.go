@@ -90,22 +90,23 @@ func (a *Agent) poll() {
 }
 
 func (a *Agent) report() {
-	for name, value := range a.gauges {
-		if err := a.send(models.Metrics{ID: name, MType: models.Gauge, Value: &value}); err != nil {
-			a.log.Warn("не отправил метрику", zap.String("id", name), zap.Error(err))
-		}
-	}
-
 	delta := a.pollCount
-	if err := a.send(models.Metrics{ID: "PollCount", MType: models.Counter, Delta: &delta}); err != nil {
-		a.log.Warn("не отправил метрику", zap.String("id", "PollCount"), zap.Error(err))
+
+	batch := make([]models.Metrics, 0, len(a.gauges)+1)
+	for name, value := range a.gauges {
+		batch = append(batch, models.Metrics{ID: name, MType: models.Gauge, Value: &value})
+	}
+	batch = append(batch, models.Metrics{ID: "PollCount", MType: models.Counter, Delta: &delta})
+
+	if err := a.send(batch); err != nil {
+		a.log.Warn("не отправил метрики", zap.Int("count", len(batch)), zap.Error(err))
 		return
 	}
 	a.pollCount -= delta
 }
 
-func (a *Agent) send(m models.Metrics) error {
-	body, err := json.Marshal(m)
+func (a *Agent) send(batch []models.Metrics) error {
+	body, err := json.Marshal(batch)
 	if err != nil {
 		return err
 	}
@@ -119,7 +120,7 @@ func (a *Agent) send(m models.Metrics) error {
 		return err
 	}
 
-	req, err := http.NewRequest(http.MethodPost, a.baseURL+"/update/", &buf)
+	req, err := http.NewRequest(http.MethodPost, a.baseURL+"/updates/", &buf)
 	if err != nil {
 		return err
 	}

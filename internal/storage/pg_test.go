@@ -4,12 +4,15 @@ import (
 	"context"
 	"database/sql"
 	"os"
+	"strings"
 	"testing"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
+
+	models "github.com/mgfan1/go-metrics/internal/model"
 )
 
 const defaultTestDSN = "postgres://metrics:metrics@localhost:5432/metrics?sslmode=disable"
@@ -112,6 +115,53 @@ func TestPGSameNameDifferentTypes(t *testing.T) {
 	counter, err := s.Counter(ctx, "Same")
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), counter)
+}
+
+func TestPGUpdateBatchWithDuplicates(t *testing.T) {
+	ctx := context.Background()
+	s := newPGStorage(t)
+
+	batch := []models.Metrics{
+		counter("PollCount", 5),
+		gauge("Alloc", 1.5),
+		counter("PollCount", 3),
+		gauge("Alloc", 42.1),
+	}
+	require.NoError(t, s.UpdateBatch(ctx, batch), "дубликаты ID в батче не должны ломать транзакцию")
+
+	got, err := s.Counter(ctx, "PollCount")
+	require.NoError(t, err)
+	assert.Equal(t, int64(8), got)
+
+	value, err := s.Gauge(ctx, "Alloc")
+	require.NoError(t, err)
+	assert.Equal(t, 42.1, value)
+}
+
+func TestPGUpdateBatchEmpty(t *testing.T) {
+	ctx := context.Background()
+	s := newPGStorage(t)
+
+	require.NoError(t, s.UpdateBatch(ctx, nil))
+
+	gauges, counters, err := s.Snapshot(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, gauges)
+	assert.Empty(t, counters)
+}
+
+func TestPGUpdateBatchRollsBackOnError(t *testing.T) {
+	ctx := context.Background()
+	s := newPGStorage(t)
+
+	batch := []models.Metrics{
+		gauge("Alloc", 1.5),
+		gauge(strings.Repeat("x", 300), 2.5),
+	}
+	require.Error(t, s.UpdateBatch(ctx, batch), "имя длиннее varchar(255) должно ломать батч")
+
+	_, err := s.Gauge(ctx, "Alloc")
+	assert.ErrorIs(t, err, ErrNotFound, "метрика из упавшего батча не должна остаться в таблице")
 }
 
 func TestPGMigrationsAreIdempotent(t *testing.T) {
