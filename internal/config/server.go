@@ -13,6 +13,7 @@ type Server struct {
 	FileStorage   string
 	Restore       bool
 	DatabaseDSN   string
+	Key           string
 }
 
 func ParseServer() (Server, error) {
@@ -23,6 +24,7 @@ func ParseServer() (Server, error) {
 	flag.StringVar(&cfg.FileStorage, "f", "/tmp/metrics-db.json", "файл для хранения метрик")
 	flag.BoolVar(&cfg.Restore, "r", true, "загружать сохранённые метрики при старте")
 	flag.StringVar(&cfg.DatabaseDSN, "d", "", "строка подключения к базе данных")
+	flag.StringVar(&cfg.Key, "k", "", "ключ подписи передаваемых данных")
 	flag.Parse()
 
 	if v, ok := os.LookupEnv("ADDRESS"); ok {
@@ -47,6 +49,9 @@ func ParseServer() (Server, error) {
 	}
 	if v, ok := os.LookupEnv("DATABASE_DSN"); ok {
 		cfg.DatabaseDSN = v
+	}
+	if v, ok := os.LookupEnv("KEY"); ok {
+		cfg.Key = v
 	}
 
 	return cfg, nil

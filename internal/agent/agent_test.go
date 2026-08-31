@@ -13,13 +13,14 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
+	"github.com/mgfan1/go-metrics/internal/config"
 	"github.com/mgfan1/go-metrics/internal/handler"
+	"github.com/mgfan1/go-metrics/internal/hash"
 	models "github.com/mgfan1/go-metrics/internal/model"
 	"github.com/mgfan1/go-metrics/internal/storage"
 )
@@ -51,6 +52,15 @@ func newCollector() (*httptest.Server, func() []captured) {
 	}
 }
 
+func newAgent(serverURL, key string) *Agent {
+	return New(config.Agent{
+		Addr:           strings.TrimPrefix(serverURL, "http://"),
+		ReportInterval: 1,
+		PollInterval:   1,
+		Key:            key,
+	}, zap.NewNop())
+}
+
 func unpack(t *testing.T, raw []byte) []models.Metrics {
 	t.Helper()
 
@@ -67,7 +77,7 @@ func unpack(t *testing.T, raw []byte) []models.Metrics {
 }
 
 func TestPoll(t *testing.T) {
-	a := New("localhost:8080", time.Second, time.Second, zap.NewNop())
+	a := newAgent("localhost:8080", "")
 	a.poll()
 	a.poll()
 
@@ -86,7 +96,7 @@ func TestReport(t *testing.T) {
 	srv, dump := newCollector()
 	defer srv.Close()
 
-	a := New(strings.TrimPrefix(srv.URL, "http://"), time.Second, time.Second, zap.NewNop())
+	a := newAgent(srv.URL, "")
 	a.poll()
 	a.report(t.Context())
 
@@ -120,7 +130,7 @@ func TestReportSendsGzip(t *testing.T) {
 	srv, dump := newCollector()
 	defer srv.Close()
 
-	a := New(strings.TrimPrefix(srv.URL, "http://"), time.Second, time.Second, zap.NewNop())
+	a := newAgent(srv.URL, "")
 	a.poll()
 	a.report(t.Context())
 
@@ -137,6 +147,55 @@ func TestReportSendsGzip(t *testing.T) {
 	for _, m := range unpack(t, c.raw) {
 		assert.NotEmpty(t, m.ID)
 	}
+}
+
+func TestReportSignsBody(t *testing.T) {
+	srv, dump := newCollector()
+	defer srv.Close()
+
+	a := newAgent(srv.URL, "секрет")
+	a.poll()
+	a.report(t.Context())
+
+	got := dump()
+	require.Len(t, got, 1)
+
+	signature := got[0].headers.Get(hash.Header)
+	require.NotEmpty(t, signature, "агент не подписал запрос")
+
+	zr, err := gzip.NewReader(bytes.NewReader(got[0].raw))
+	require.NoError(t, err)
+	body, err := io.ReadAll(zr)
+	require.NoError(t, err)
+
+	assert.True(t, hash.Valid(body, "секрет", signature), "подпись не сходится с несжатым телом")
+}
+
+func TestReportWithoutKeyDoesNotSign(t *testing.T) {
+	srv, dump := newCollector()
+	defer srv.Close()
+
+	a := newAgent(srv.URL, "")
+	a.poll()
+	a.report(t.Context())
+
+	got := dump()
+	require.Len(t, got, 1)
+	assert.Empty(t, got[0].headers.Get(hash.Header))
+}
+
+func TestAgentSendsSignedToRealServer(t *testing.T) {
+	store := storage.NewMemStorage()
+	srv := httptest.NewServer(handler.New(store, nil, zap.NewNop()).Router(zap.NewNop(), "секрет"))
+	defer srv.Close()
+
+	delta := int64(3)
+	a := newAgent(srv.URL, "секрет")
+	require.NoError(t, a.send(t.Context(), []models.Metrics{{ID: "PollCount", MType: models.Counter, Delta: &delta}}))
+
+	total, err := store.Counter(t.Context(), "PollCount")
+	require.NoError(t, err, "сервер отверг подписанный запрос")
+	assert.Equal(t, int64(3), total)
 }
 
 func TestSendMetricPayload(t *testing.T) {
@@ -158,7 +217,7 @@ func TestSendMetricPayload(t *testing.T) {
 			srv, dump := newCollector()
 			defer srv.Close()
 
-			a := New(strings.TrimPrefix(srv.URL, "http://"), time.Second, time.Second, zap.NewNop())
+			a := newAgent(srv.URL, "")
 			require.NoError(t, a.send(t.Context(), []models.Metrics{c.metric}))
 
 			got := dump()
@@ -185,7 +244,7 @@ func TestReportResetsPollCount(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := New(strings.TrimPrefix(srv.URL, "http://"), time.Second, time.Second, zap.NewNop())
+	a := newAgent(srv.URL, "")
 	a.poll()
 	a.poll()
 	a.report(t.Context())
@@ -201,7 +260,7 @@ func TestReportKeepsPollCountOnFailure(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := New(strings.TrimPrefix(srv.URL, "http://"), time.Second, time.Second, zap.NewNop())
+	a := newAgent(srv.URL, "")
 	a.poll()
 	a.poll()
 	a.report(t.Context())
@@ -233,7 +292,7 @@ func TestSendReturnsErrorOnBadStatus(t *testing.T) {
 	defer srv.Close()
 
 	value := 1.0
-	a := New(strings.TrimPrefix(srv.URL, "http://"), time.Second, time.Second, zap.NewNop())
+	a := newAgent(srv.URL, "")
 
 	err := a.send(t.Context(), []models.Metrics{{ID: "Alloc", MType: models.Gauge, Value: &value}})
 	require.Error(t, err)
@@ -242,10 +301,10 @@ func TestSendReturnsErrorOnBadStatus(t *testing.T) {
 
 func TestAgentSendsToRealServer(t *testing.T) {
 	store := storage.NewMemStorage()
-	srv := httptest.NewServer(handler.New(store, nil, zap.NewNop()).Router(zap.NewNop()))
+	srv := httptest.NewServer(handler.New(store, nil, zap.NewNop()).Router(zap.NewNop(), ""))
 	defer srv.Close()
 
-	a := New(strings.TrimPrefix(srv.URL, "http://"), time.Second, time.Second, zap.NewNop())
+	a := newAgent(srv.URL, "")
 	a.poll()
 	a.report(t.Context())
 

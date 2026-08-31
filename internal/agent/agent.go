@@ -16,6 +16,8 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/mgfan1/go-metrics/internal/config"
+	"github.com/mgfan1/go-metrics/internal/hash"
 	models "github.com/mgfan1/go-metrics/internal/model"
 	"github.com/mgfan1/go-metrics/internal/retry"
 )
@@ -24,6 +26,7 @@ type Agent struct {
 	baseURL        string
 	pollInterval   time.Duration
 	reportInterval time.Duration
+	key            string
 	client         *http.Client
 	gauges         map[string]float64
 	pollCount      int64
@@ -31,11 +34,12 @@ type Agent struct {
 	retrier        *retry.Retrier
 }
 
-func New(serverAddr string, poll, report time.Duration, log *zap.Logger) *Agent {
+func New(cfg config.Agent, log *zap.Logger) *Agent {
 	return &Agent{
-		baseURL:        "http://" + serverAddr,
-		pollInterval:   poll,
-		reportInterval: report,
+		baseURL:        "http://" + cfg.Addr,
+		pollInterval:   time.Duration(cfg.PollInterval) * time.Second,
+		reportInterval: time.Duration(cfg.ReportInterval) * time.Second,
+		key:            cfg.Key,
 		client:         &http.Client{Timeout: 5 * time.Second},
 		gauges:         make(map[string]float64),
 		log:            log,
@@ -144,6 +148,9 @@ func (a *Agent) send(ctx context.Context, batch []models.Metrics) error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Content-Encoding", "gzip")
+	if a.key != "" {
+		req.Header.Set(hash.Header, hash.Sign(body, a.key))
+	}
 
 	resp, err := a.client.Do(req)
 	if err != nil {

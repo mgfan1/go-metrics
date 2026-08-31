@@ -11,6 +11,7 @@ type Agent struct {
 	Addr           string
 	ReportInterval int
 	PollInterval   int
+	Key            string
 }
 
 func ParseAgent() (Agent, error) {
@@ -19,6 +20,7 @@ func ParseAgent() (Agent, error) {
 	flag.StringVar(&cfg.Addr, "a", "localhost:8080", "адрес сервера метрик")
 	flag.IntVar(&cfg.ReportInterval, "r", 10, "период отправки метрик, сек")
 	flag.IntVar(&cfg.PollInterval, "p", 2, "период опроса метрик, сек")
+	flag.StringVar(&cfg.Key, "k", "", "ключ подписи передаваемых данных")
 	flag.Parse()
 
 	if v, ok := os.LookupEnv("ADDRESS"); ok {
@@ -37,6 +39,9 @@ func ParseAgent() (Agent, error) {
 			return cfg, fmt.Errorf("POLL_INTERVAL: %w", err)
 		}
 		cfg.PollInterval = n
+	}
+	if v, ok := os.LookupEnv("KEY"); ok {
+		cfg.Key = v
 	}
 
 	if cfg.ReportInterval <= 0 {
