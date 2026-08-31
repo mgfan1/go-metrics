@@ -12,8 +12,13 @@ import (
 	"net"
 	"net/http"
 	"runtime"
+	"strconv"
+	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/shirou/gopsutil/v4/cpu"
+	"github.com/shirou/gopsutil/v4/mem"
 	"go.uber.org/zap"
 
 	"github.com/mgfan1/go-metrics/internal/config"
@@ -22,25 +27,41 @@ import (
 	"github.com/mgfan1/go-metrics/internal/retry"
 )
 
+const minPartSize = 10
+
+type job struct {
+	batch []models.Metrics
+	delta int64
+}
+
 type Agent struct {
 	baseURL        string
 	pollInterval   time.Duration
 	reportInterval time.Duration
 	key            string
+	rateLimit      int
 	client         *http.Client
+	mu             sync.RWMutex
 	gauges         map[string]float64
-	pollCount      int64
+	pollCount      atomic.Int64
 	log            *zap.Logger
 	retrier        *retry.Retrier
 }
 
 func New(cfg config.Agent, log *zap.Logger) *Agent {
+	rateLimit := max(cfg.RateLimit, 1)
+
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxIdleConns = rateLimit
+	transport.MaxIdleConnsPerHost = rateLimit
+
 	return &Agent{
 		baseURL:        "http://" + cfg.Addr,
 		pollInterval:   time.Duration(cfg.PollInterval) * time.Second,
 		reportInterval: time.Duration(cfg.ReportInterval) * time.Second,
 		key:            cfg.Key,
-		client:         &http.Client{Timeout: 5 * time.Second},
+		rateLimit:      rateLimit,
+		client:         &http.Client{Timeout: 5 * time.Second, Transport: transport},
 		gauges:         make(map[string]float64),
 		log:            log,
 		retrier:        retry.New(log),
@@ -48,31 +69,81 @@ func New(cfg config.Agent, log *zap.Logger) *Agent {
 }
 
 func (a *Agent) Run(ctx context.Context) {
-	pollTicker := time.NewTicker(a.pollInterval)
-	reportTicker := time.NewTicker(a.reportInterval)
-	defer pollTicker.Stop()
-	defer reportTicker.Stop()
+	a.poll()
+	a.pollSystem()
+
+	jobs := make(chan job, 2*a.rateLimit)
+
+	var pool sync.WaitGroup
+	pool.Go(func() { a.runWorkers(ctx, jobs) })
+
+	var collectors sync.WaitGroup
+	collectors.Go(func() { a.pollLoop(ctx, a.poll) })
+	collectors.Go(func() { a.pollLoop(ctx, a.pollSystem) })
+	collectors.Go(func() { a.reportLoop(ctx, jobs) })
+	collectors.Wait()
+
+	close(jobs)
+	pool.Wait()
+
+	a.client.CloseIdleConnections()
+}
+
+func (a *Agent) pollLoop(ctx context.Context, collect func()) {
+	ticker := time.NewTicker(a.pollInterval)
+	defer ticker.Stop()
 
 	for {
-		if ctx.Err() != nil {
-			return
-		}
-
 		select {
 		case <-ctx.Done():
 			return
-		case <-pollTicker.C:
-			a.poll()
-		case <-reportTicker.C:
-			a.report(ctx)
+		case <-ticker.C:
+			collect()
 		}
 	}
+}
+
+func (a *Agent) reportLoop(ctx context.Context, jobs chan<- job) {
+	ticker := time.NewTicker(a.reportInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			for _, j := range split(a.snapshot(), a.rateLimit) {
+				select {
+				case jobs <- j:
+				default:
+					a.pollCount.Add(j.delta)
+					a.log.Warn("очередь отправки переполнена", zap.Int("count", len(j.batch)))
+				}
+			}
+		}
+	}
+}
+
+func (a *Agent) runWorkers(ctx context.Context, jobs <-chan job) {
+	var wg sync.WaitGroup
+
+	for i := range a.rateLimit {
+		log := a.log.With(zap.Int("worker", i+1))
+		wg.Go(func() {
+			for j := range jobs {
+				a.deliver(ctx, j, log)
+			}
+		})
+	}
+
+	wg.Wait()
 }
 
 func (a *Agent) poll() {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 
+	a.mu.Lock()
 	a.gauges["Alloc"] = float64(m.Alloc)
 	a.gauges["BuckHashSys"] = float64(m.BuckHashSys)
 	a.gauges["Frees"] = float64(m.Frees)
@@ -101,25 +172,96 @@ func (a *Agent) poll() {
 	a.gauges["Sys"] = float64(m.Sys)
 	a.gauges["TotalAlloc"] = float64(m.TotalAlloc)
 	a.gauges["RandomValue"] = rand.Float64()
+	a.mu.Unlock()
 
-	a.pollCount++
+	a.pollCount.Add(1)
 }
 
-func (a *Agent) report(ctx context.Context) {
-	delta := a.pollCount
+func (a *Agent) pollSystem() {
+	collected := make(map[string]float64, 3)
 
+	if vm, err := mem.VirtualMemory(); err != nil {
+		a.log.Warn("не собрал метрики памяти", zap.Error(err))
+	} else {
+		collected["TotalMemory"] = float64(vm.Total)
+		collected["FreeMemory"] = float64(vm.Free)
+	}
+
+	if loads, err := cpu.Percent(0, true); err != nil {
+		a.log.Warn("не снял загрузку CPU", zap.Error(err))
+	} else {
+		for i, load := range loads {
+			collected["CPUutilization"+strconv.Itoa(i+1)] = load
+		}
+	}
+
+	if len(collected) == 0 {
+		return
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	for name, value := range collected {
+		a.gauges[name] = value
+	}
+}
+
+func (a *Agent) snapshot() job {
+	delta := a.pollCount.Swap(0)
+
+	a.mu.RLock()
 	batch := make([]models.Metrics, 0, len(a.gauges)+1)
+	batch = append(batch, models.Metrics{ID: "PollCount", MType: models.Counter, Delta: &delta})
 	for name, value := range a.gauges {
 		batch = append(batch, models.Metrics{ID: name, MType: models.Gauge, Value: &value})
 	}
-	batch = append(batch, models.Metrics{ID: "PollCount", MType: models.Counter, Delta: &delta})
+	a.mu.RUnlock()
 
-	err := a.retrier.Do(ctx, retriableSend, func() error { return a.send(ctx, batch) })
-	if err != nil {
-		a.log.Warn("не отправил метрики", zap.Int("count", len(batch)), zap.Error(err))
+	return job{batch: batch, delta: delta}
+}
+
+func split(j job, parts int) []job {
+	if limit := (len(j.batch) + minPartSize - 1) / minPartSize; parts > limit {
+		parts = limit
+	}
+	if parts < 2 {
+		return []job{j}
+	}
+
+	size := (len(j.batch) + parts - 1) / parts
+
+	jobs := make([]job, 0, parts)
+	for start := 0; start < len(j.batch); start += size {
+		jobs = append(jobs, job{batch: j.batch[start:min(start+size, len(j.batch))]})
+	}
+
+	part := 0
+	for i, m := range j.batch {
+		if m.MType == models.Counter {
+			part = i / size
+			break
+		}
+	}
+	jobs[part].delta = j.delta
+
+	return jobs
+}
+
+func (a *Agent) deliver(ctx context.Context, j job, log *zap.Logger) {
+	err := a.retrier.Do(ctx, retriableSend, func() error { return a.send(ctx, j.batch) })
+	if err == nil {
 		return
 	}
-	a.pollCount -= delta
+
+	a.pollCount.Add(j.delta)
+
+	if ctx.Err() != nil {
+		log.Debug("не отправил метрики при остановке", zap.Int("count", len(j.batch)), zap.Error(err))
+		return
+	}
+
+	log.Warn("не отправил метрики", zap.Int("count", len(j.batch)), zap.Error(err))
 }
 
 func retriableSend(err error) bool {

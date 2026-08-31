@@ -27,6 +27,10 @@ func (r *Retrier) Do(ctx context.Context, retriable func(error) bool, op func() 
 			return err
 		}
 
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
 		r.log.Warn("повторная попытка", zap.Int("attempt", i+1), zap.Duration("delay", delay), zap.Error(err))
 
 		select {

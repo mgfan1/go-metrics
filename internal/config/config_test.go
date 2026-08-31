@@ -12,6 +12,11 @@ import (
 func withArgs(t *testing.T, args ...string) {
 	t.Helper()
 
+	for _, name := range []string{"ADDRESS", "REPORT_INTERVAL", "POLL_INTERVAL", "KEY", "RATE_LIMIT", "STORE_INTERVAL", "FILE_STORAGE_PATH", "RESTORE", "DATABASE_DSN"} {
+		t.Setenv(name, "")
+		require.NoError(t, os.Unsetenv(name))
+	}
+
 	oldArgs, oldFlags := os.Args, flag.CommandLine
 	t.Cleanup(func() {
 		os.Args, flag.CommandLine = oldArgs, oldFlags
@@ -65,6 +70,39 @@ func TestAgentEnvBeatsFlag(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "настоящий ключ", cfg.Key)
 	assert.Equal(t, 5, cfg.ReportInterval)
+}
+
+func TestAgentRateLimitFromFlag(t *testing.T) {
+	withArgs(t, "-l", "7")
+
+	cfg, err := ParseAgent()
+	require.NoError(t, err)
+	assert.Equal(t, 7, cfg.RateLimit)
+}
+
+func TestAgentRateLimitEnvBeatsFlag(t *testing.T) {
+	withArgs(t, "-l", "7")
+	t.Setenv("RATE_LIMIT", "3")
+
+	cfg, err := ParseAgent()
+	require.NoError(t, err)
+	assert.Equal(t, 3, cfg.RateLimit)
+}
+
+func TestAgentRateLimitFallsBackToOne(t *testing.T) {
+	withArgs(t, "-l", "0")
+
+	cfg, err := ParseAgent()
+	require.NoError(t, err)
+	assert.Equal(t, 1, cfg.RateLimit)
+}
+
+func TestAgentBadRateLimit(t *testing.T) {
+	withArgs(t)
+	t.Setenv("RATE_LIMIT", "не число")
+
+	_, err := ParseAgent()
+	require.Error(t, err)
 }
 
 func TestAgentRejectsNonPositiveIntervals(t *testing.T) {

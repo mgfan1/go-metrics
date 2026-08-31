@@ -12,6 +12,7 @@ type Agent struct {
 	ReportInterval int
 	PollInterval   int
 	Key            string
+	RateLimit      int
 }
 
 func ParseAgent() (Agent, error) {
@@ -21,6 +22,7 @@ func ParseAgent() (Agent, error) {
 	flag.IntVar(&cfg.ReportInterval, "r", 10, "период отправки метрик, сек")
 	flag.IntVar(&cfg.PollInterval, "p", 2, "период опроса метрик, сек")
 	flag.StringVar(&cfg.Key, "k", "", "ключ подписи передаваемых данных")
+	flag.IntVar(&cfg.RateLimit, "l", 1, "число одновременных запросов к серверу")
 	flag.Parse()
 
 	if v, ok := os.LookupEnv("ADDRESS"); ok {
@@ -42,6 +44,17 @@ func ParseAgent() (Agent, error) {
 	}
 	if v, ok := os.LookupEnv("KEY"); ok {
 		cfg.Key = v
+	}
+	if v, ok := os.LookupEnv("RATE_LIMIT"); ok {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return cfg, fmt.Errorf("RATE_LIMIT: %w", err)
+		}
+		cfg.RateLimit = n
+	}
+
+	if cfg.RateLimit <= 0 {
+		cfg.RateLimit = 1
 	}
 
 	if cfg.ReportInterval <= 0 {

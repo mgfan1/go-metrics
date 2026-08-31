@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -10,10 +11,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -58,7 +63,31 @@ func newAgent(serverURL, key string) *Agent {
 		ReportInterval: 1,
 		PollInterval:   1,
 		Key:            key,
+		RateLimit:      1,
 	}, zap.NewNop())
+}
+
+func report(t *testing.T, a *Agent) {
+	t.Helper()
+	a.deliver(t.Context(), a.snapshot(), a.log)
+}
+
+func gaugeJob() job {
+	value := 1.0
+	return job{batch: []models.Metrics{{ID: "Alloc", MType: models.Gauge, Value: &value}}}
+}
+
+func batchOf(n int) job {
+	delta := int64(5)
+
+	batch := make([]models.Metrics, 0, n)
+	batch = append(batch, models.Metrics{ID: "PollCount", MType: models.Counter, Delta: &delta})
+	for i := 1; i < n; i++ {
+		value := float64(i)
+		batch = append(batch, models.Metrics{ID: "Gauge" + strconv.Itoa(i), MType: models.Gauge, Value: &value})
+	}
+
+	return job{batch: batch, delta: delta}
 }
 
 func unpack(t *testing.T, raw []byte) []models.Metrics {
@@ -81,8 +110,8 @@ func TestPoll(t *testing.T) {
 	a.poll()
 	a.poll()
 
-	if a.pollCount != 2 {
-		t.Errorf("pollCount = %d, хотел 2", a.pollCount)
+	if a.pollCount.Load() != 2 {
+		t.Errorf("pollCount = %d, хотел 2", a.pollCount.Load())
 	}
 	if _, ok := a.gauges["Alloc"]; !ok {
 		t.Error("после poll нет метрики Alloc")
@@ -92,13 +121,57 @@ func TestPoll(t *testing.T) {
 	}
 }
 
+func TestPollSystem(t *testing.T) {
+	a := newAgent("localhost:8080", "")
+	a.pollSystem()
+
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	require.Contains(t, a.gauges, "TotalMemory")
+	assert.Positive(t, a.gauges["TotalMemory"])
+	assert.Contains(t, a.gauges, "FreeMemory")
+	assert.Contains(t, a.gauges, "CPUutilization1", "нет утилизации первого ядра")
+
+	cores, err := cpu.Counts(true)
+	require.NoError(t, err)
+	assert.Contains(t, a.gauges, "CPUutilization"+strconv.Itoa(cores), "метрики не по числу ядер")
+}
+
+func TestSnapshotIncludesSystemGauges(t *testing.T) {
+	a := newAgent("localhost:8080", "")
+	a.poll()
+	a.pollSystem()
+
+	names := make(map[string]models.Metrics)
+	for _, m := range a.snapshot().batch {
+		names[m.ID] = m
+	}
+
+	for _, name := range []string{"TotalMemory", "FreeMemory", "CPUutilization1"} {
+		m, ok := names[name]
+		require.True(t, ok, "метрика %s не попала в батч", name)
+		assert.Equal(t, models.Gauge, m.MType)
+		assert.NotNil(t, m.Value)
+	}
+}
+
+func TestSnapshotTakesPollCountOnce(t *testing.T) {
+	a := newAgent("localhost:8080", "")
+	a.poll()
+	a.poll()
+
+	assert.Equal(t, int64(2), a.snapshot().delta)
+	assert.Equal(t, int64(0), a.snapshot().delta, "один и тот же PollCount ушёл дважды")
+}
+
 func TestReport(t *testing.T) {
 	srv, dump := newCollector()
 	defer srv.Close()
 
 	a := newAgent(srv.URL, "")
 	a.poll()
-	a.report(t.Context())
+	report(t, a)
 
 	got := dump()
 	require.Len(t, got, 1, "метрики должны уходить одним запросом")
@@ -132,7 +205,7 @@ func TestReportSendsGzip(t *testing.T) {
 
 	a := newAgent(srv.URL, "")
 	a.poll()
-	a.report(t.Context())
+	report(t, a)
 
 	got := dump()
 	require.Len(t, got, 1)
@@ -155,7 +228,7 @@ func TestReportSignsBody(t *testing.T) {
 
 	a := newAgent(srv.URL, "секрет")
 	a.poll()
-	a.report(t.Context())
+	report(t, a)
 
 	got := dump()
 	require.Len(t, got, 1)
@@ -177,7 +250,7 @@ func TestReportWithoutKeyDoesNotSign(t *testing.T) {
 
 	a := newAgent(srv.URL, "")
 	a.poll()
-	a.report(t.Context())
+	report(t, a)
 
 	got := dump()
 	require.Len(t, got, 1)
@@ -247,10 +320,10 @@ func TestReportResetsPollCount(t *testing.T) {
 	a := newAgent(srv.URL, "")
 	a.poll()
 	a.poll()
-	a.report(t.Context())
+	report(t, a)
 
-	if a.pollCount != 0 {
-		t.Errorf("после report pollCount = %d, хотел 0", a.pollCount)
+	if a.pollCount.Load() != 0 {
+		t.Errorf("после report pollCount = %d, хотел 0", a.pollCount.Load())
 	}
 }
 
@@ -263,9 +336,9 @@ func TestReportKeepsPollCountOnFailure(t *testing.T) {
 	a := newAgent(srv.URL, "")
 	a.poll()
 	a.poll()
-	a.report(t.Context())
+	report(t, a)
 
-	assert.Equal(t, int64(2), a.pollCount, "при ошибке отправки счётчик опросов терять нельзя")
+	assert.Equal(t, int64(2), a.pollCount.Load(), "при ошибке отправки счётчик опросов терять нельзя")
 }
 
 func TestRetriableSend(t *testing.T) {
@@ -306,7 +379,7 @@ func TestAgentSendsToRealServer(t *testing.T) {
 
 	a := newAgent(srv.URL, "")
 	a.poll()
-	a.report(t.Context())
+	report(t, a)
 
 	ctx := t.Context()
 
@@ -317,4 +390,199 @@ func TestAgentSendsToRealServer(t *testing.T) {
 	d, err := store.Counter(ctx, "PollCount")
 	require.NoError(t, err, "сервер не сохранил PollCount")
 	assert.Equal(t, int64(1), d)
+}
+
+func TestWorkersRespectRateLimit(t *testing.T) {
+	const limit = 3
+
+	var mu sync.Mutex
+	var active, peak int
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		active++
+		if active > peak {
+			peak = active
+		}
+		mu.Unlock()
+
+		time.Sleep(50 * time.Millisecond)
+
+		mu.Lock()
+		active--
+		mu.Unlock()
+
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	a := newAgent(srv.URL, "")
+	a.rateLimit = limit
+
+	jobs := make(chan job, 9)
+	for range cap(jobs) {
+		jobs <- gaugeJob()
+	}
+	close(jobs)
+
+	a.runWorkers(t.Context(), jobs)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	assert.LessOrEqual(t, peak, limit, "запросов в полёте больше лимита")
+	assert.Greater(t, peak, 1, "воркеры отправляли по очереди")
+}
+
+func TestNewFallsBackToSingleWorker(t *testing.T) {
+	a := New(config.Agent{Addr: "localhost:8080", ReportInterval: 10, PollInterval: 2}, zap.NewNop())
+	assert.Equal(t, 1, a.rateLimit)
+}
+
+func TestSplitFeedsEveryWorker(t *testing.T) {
+	src := batchOf(51)
+	parts := split(src, 4)
+
+	require.Len(t, parts, 4, "батч не разошёлся по воркерам")
+
+	var total, counters int
+	var delta int64
+
+	for _, p := range parts {
+		total += len(p.batch)
+		delta += p.delta
+
+		for _, m := range p.batch {
+			if m.MType == models.Counter {
+				counters++
+				assert.Equal(t, src.delta, p.delta, "дельта не у той части, что несёт PollCount")
+			}
+		}
+	}
+
+	assert.Equal(t, len(src.batch), total, "метрики потерялись при нарезке")
+	assert.Equal(t, 1, counters, "PollCount попал больше чем в одну часть")
+	assert.Equal(t, src.delta, delta, "дельта задвоилась или потерялась")
+}
+
+func TestSplitFollowsCounterPosition(t *testing.T) {
+	src := batchOf(51)
+	src.batch = append(src.batch[1:], src.batch[0])
+
+	parts := split(src, 4)
+	require.Len(t, parts, 4)
+
+	for _, p := range parts {
+		counters := 0
+		for _, m := range p.batch {
+			if m.MType == models.Counter {
+				counters++
+			}
+		}
+
+		if counters == 0 {
+			assert.Zero(t, p.delta, "дельта уехала без PollCount")
+			continue
+		}
+		assert.Equal(t, src.delta, p.delta, "дельта не у той части, что несёт PollCount")
+	}
+}
+
+func TestSplitKeepsOneJobForOneWorker(t *testing.T) {
+	src := batchOf(51)
+	parts := split(src, 1)
+
+	require.Len(t, parts, 1)
+	assert.Len(t, parts[0].batch, len(src.batch))
+	assert.Equal(t, src.delta, parts[0].delta)
+}
+
+func TestSplitDoesNotCutBatchTooFine(t *testing.T) {
+	parts := split(batchOf(15), 8)
+
+	require.Len(t, parts, 2, "мелкий батч раздробили по числу воркеров")
+	for _, p := range parts {
+		assert.GreaterOrEqual(t, len(p.batch), 7)
+	}
+}
+
+func TestReportLoopSplitsBatchIntoJobs(t *testing.T) {
+	a := newAgent("localhost:8080", "")
+	a.rateLimit = 4
+	a.reportInterval = 10 * time.Millisecond
+	a.poll()
+
+	jobs := make(chan job, 2*a.rateLimit)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		a.reportLoop(ctx, jobs)
+	}()
+
+	var sent, total, counters int
+	for total < 29 {
+		select {
+		case j := <-jobs:
+			sent++
+			total += len(j.batch)
+			for _, m := range j.batch {
+				if m.MType == models.Counter {
+					counters++
+				}
+			}
+		case <-time.After(time.Second):
+			t.Fatal("reportLoop не отправил весь батч")
+		}
+	}
+
+	cancel()
+	<-done
+
+	assert.Greater(t, sent, 1, "тик уехал одним заданием, воркеры простаивают")
+	assert.Equal(t, 29, total)
+	assert.Equal(t, 1, counters)
+}
+
+func TestQueueOverflowKeepsPollCount(t *testing.T) {
+	a := newAgent("localhost:8080", "")
+	a.reportInterval = 10 * time.Millisecond
+	a.poll()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+
+	a.reportLoop(ctx, make(chan job))
+
+	assert.Equal(t, int64(1), a.pollCount.Load(), "при переполнении очереди счётчик опросов терять нельзя")
+}
+
+func TestRunStopsOnCancel(t *testing.T) {
+	a := newAgent("127.0.0.1:1", "")
+	a.pollInterval = 10 * time.Millisecond
+	a.reportInterval = 10 * time.Millisecond
+
+	before := runtime.NumGoroutine()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		a.Run(ctx)
+	}()
+
+	require.Eventually(t, func() bool { return a.pollCount.Load() > 2 }, time.Second, 10*time.Millisecond, "агент не собирает метрики")
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("агент не остановился по отмене контекста")
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	assert.LessOrEqual(t, runtime.NumGoroutine(), before, "остались висящие горутины")
 }
