@@ -53,7 +53,7 @@ func TestPingRoute(t *testing.T) {
 	db.On("PingContext", mock.Anything).Return(nil)
 
 	h := New(storage.NewMemStorage(), db, zap.NewNop())
-	ts := httptest.NewServer(h.Router(zap.NewNop()))
+	ts := httptest.NewServer(h.Router(zap.NewNop(), ""))
 	defer ts.Close()
 
 	code, body := do(t, ts, http.MethodGet, "/ping")

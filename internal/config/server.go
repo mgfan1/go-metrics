@@ -2,9 +2,6 @@ package config
 
 import (
 	"flag"
-	"fmt"
-	"os"
-	"strconv"
 )
 
 type Server struct {
@@ -13,6 +10,7 @@ type Server struct {
 	FileStorage   string
 	Restore       bool
 	DatabaseDSN   string
+	Key           string
 }
 
 func ParseServer() (Server, error) {
@@ -23,30 +21,21 @@ func ParseServer() (Server, error) {
 	flag.StringVar(&cfg.FileStorage, "f", "/tmp/metrics-db.json", "файл для хранения метрик")
 	flag.BoolVar(&cfg.Restore, "r", true, "загружать сохранённые метрики при старте")
 	flag.StringVar(&cfg.DatabaseDSN, "d", "", "строка подключения к базе данных")
+	flag.StringVar(&cfg.Key, "k", "", "ключ подписи передаваемых данных")
 	flag.Parse()
 
-	if v, ok := os.LookupEnv("ADDRESS"); ok {
-		cfg.Addr = v
-	}
-	if v, ok := os.LookupEnv("STORE_INTERVAL"); ok {
-		n, err := strconv.Atoi(v)
+	envString("ADDRESS", &cfg.Addr)
+	envString("FILE_STORAGE_PATH", &cfg.FileStorage)
+	envString("DATABASE_DSN", &cfg.DatabaseDSN)
+	envString("KEY", &cfg.Key)
+
+	for _, err := range []error{
+		envInt("STORE_INTERVAL", &cfg.StoreInterval),
+		envBool("RESTORE", &cfg.Restore),
+	} {
 		if err != nil {
-			return cfg, fmt.Errorf("STORE_INTERVAL: %w", err)
+			return cfg, err
 		}
-		cfg.StoreInterval = n
-	}
-	if v, ok := os.LookupEnv("FILE_STORAGE_PATH"); ok {
-		cfg.FileStorage = v
-	}
-	if v, ok := os.LookupEnv("RESTORE"); ok {
-		b, err := strconv.ParseBool(v)
-		if err != nil {
-			return cfg, fmt.Errorf("RESTORE: %w", err)
-		}
-		cfg.Restore = b
-	}
-	if v, ok := os.LookupEnv("DATABASE_DSN"); ok {
-		cfg.DatabaseDSN = v
 	}
 
 	return cfg, nil

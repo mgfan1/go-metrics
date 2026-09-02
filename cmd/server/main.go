@@ -97,7 +97,7 @@ func run(logger *zap.Logger) error {
 	}
 
 	metrics := handler.New(repo, pinger, logger.With(zap.String("component", "handler")))
-	router := metrics.Router(logger.With(zap.String("component", "middleware")))
+	router := metrics.Router(logger.With(zap.String("component", "middleware")), cfg.Key)
 	srv := server.New(cfg.Addr, router, logger.With(zap.String("component", "server")))
 
 	if err := srv.Run(ctx); err != nil {

@@ -7,11 +7,13 @@ import (
 	"github.com/mgfan1/go-metrics/internal/middleware"
 )
 
-func (h *MetricsHandler) Router(log *zap.Logger) chi.Router {
+func (h *MetricsHandler) Router(log *zap.Logger, key string) chi.Router {
 	r := chi.NewRouter()
 
 	r.Use(middleware.Logging(log))
 	r.Use(middleware.Gzip)
+	r.Use(middleware.HashSign(key))
+	r.Use(middleware.HashCheck(key, log))
 
 	r.Get("/", h.List)
 	r.Get("/ping", h.Ping)
