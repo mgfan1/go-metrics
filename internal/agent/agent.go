@@ -29,7 +29,7 @@ import (
 
 const minPartSize = 10
 
-type job struct {
+type reportJob struct {
 	batch []models.Metrics
 	delta int64
 }
@@ -38,7 +38,7 @@ type Agent struct {
 	baseURL        string
 	pollInterval   time.Duration
 	reportInterval time.Duration
-	key            string
+	signKey        string
 	rateLimit      int
 	client         *http.Client
 	mu             sync.RWMutex
@@ -54,12 +54,13 @@ func New(cfg config.Agent, log *zap.Logger) *Agent {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.MaxIdleConns = rateLimit
 	transport.MaxIdleConnsPerHost = rateLimit
+	transport.MaxConnsPerHost = rateLimit
 
 	return &Agent{
 		baseURL:        "http://" + cfg.Addr,
 		pollInterval:   time.Duration(cfg.PollInterval) * time.Second,
 		reportInterval: time.Duration(cfg.ReportInterval) * time.Second,
-		key:            cfg.Key,
+		signKey:        cfg.Key,
 		rateLimit:      rateLimit,
 		client:         &http.Client{Timeout: 5 * time.Second, Transport: transport},
 		gauges:         make(map[string]float64),
@@ -72,7 +73,7 @@ func (a *Agent) Run(ctx context.Context) {
 	a.poll()
 	a.pollSystem()
 
-	jobs := make(chan job, 2*a.rateLimit)
+	jobs := make(chan reportJob, 2*a.rateLimit)
 
 	var pool sync.WaitGroup
 	pool.Go(func() { a.runWorkers(ctx, jobs) })
@@ -103,7 +104,7 @@ func (a *Agent) pollLoop(ctx context.Context, collect func()) {
 	}
 }
 
-func (a *Agent) reportLoop(ctx context.Context, jobs chan<- job) {
+func (a *Agent) reportLoop(ctx context.Context, jobs chan<- reportJob) {
 	ticker := time.NewTicker(a.reportInterval)
 	defer ticker.Stop()
 
@@ -115,16 +116,16 @@ func (a *Agent) reportLoop(ctx context.Context, jobs chan<- job) {
 			for _, j := range split(a.snapshot(), a.rateLimit) {
 				select {
 				case jobs <- j:
-				default:
+				case <-ctx.Done():
 					a.pollCount.Add(j.delta)
-					a.log.Warn("очередь отправки переполнена", zap.Int("count", len(j.batch)))
+					return
 				}
 			}
 		}
 	}
 }
 
-func (a *Agent) runWorkers(ctx context.Context, jobs <-chan job) {
+func (a *Agent) runWorkers(ctx context.Context, jobs <-chan reportJob) {
 	var wg sync.WaitGroup
 
 	for i := range a.rateLimit {
@@ -207,7 +208,7 @@ func (a *Agent) pollSystem() {
 	}
 }
 
-func (a *Agent) snapshot() job {
+func (a *Agent) snapshot() reportJob {
 	delta := a.pollCount.Swap(0)
 
 	a.mu.RLock()
@@ -218,37 +219,29 @@ func (a *Agent) snapshot() job {
 	}
 	a.mu.RUnlock()
 
-	return job{batch: batch, delta: delta}
+	return reportJob{batch: batch, delta: delta}
 }
 
-func split(j job, parts int) []job {
+func split(j reportJob, parts int) []reportJob {
 	if limit := (len(j.batch) + minPartSize - 1) / minPartSize; parts > limit {
 		parts = limit
 	}
 	if parts < 2 {
-		return []job{j}
+		return []reportJob{j}
 	}
 
 	size := (len(j.batch) + parts - 1) / parts
 
-	jobs := make([]job, 0, parts)
+	jobs := make([]reportJob, 0, parts)
 	for start := 0; start < len(j.batch); start += size {
-		jobs = append(jobs, job{batch: j.batch[start:min(start+size, len(j.batch))]})
+		jobs = append(jobs, reportJob{batch: j.batch[start:min(start+size, len(j.batch))]})
 	}
-
-	part := 0
-	for i, m := range j.batch {
-		if m.MType == models.Counter {
-			part = i / size
-			break
-		}
-	}
-	jobs[part].delta = j.delta
+	jobs[0].delta = j.delta
 
 	return jobs
 }
 
-func (a *Agent) deliver(ctx context.Context, j job, log *zap.Logger) {
+func (a *Agent) deliver(ctx context.Context, j reportJob, log *zap.Logger) {
 	err := a.retrier.Do(ctx, retriableSend, func() error { return a.send(ctx, j.batch) })
 	if err == nil {
 		return
@@ -290,8 +283,8 @@ func (a *Agent) send(ctx context.Context, batch []models.Metrics) error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Content-Encoding", "gzip")
-	if a.key != "" {
-		req.Header.Set(hash.Header, hash.Sign(body, a.key))
+	if a.signKey != "" {
+		req.Header.Set(hash.Header, hash.Sign(body, a.signKey))
 	}
 
 	resp, err := a.client.Do(req)

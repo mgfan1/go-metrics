@@ -3,8 +3,6 @@ package config
 import (
 	"flag"
 	"fmt"
-	"os"
-	"strconv"
 )
 
 type Agent struct {
@@ -25,32 +23,17 @@ func ParseAgent() (Agent, error) {
 	flag.IntVar(&cfg.RateLimit, "l", 1, "число одновременных запросов к серверу")
 	flag.Parse()
 
-	if v, ok := os.LookupEnv("ADDRESS"); ok {
-		cfg.Addr = v
-	}
-	if v, ok := os.LookupEnv("REPORT_INTERVAL"); ok {
-		n, err := strconv.Atoi(v)
+	envString("ADDRESS", &cfg.Addr)
+	envString("KEY", &cfg.Key)
+
+	for _, err := range []error{
+		envInt("REPORT_INTERVAL", &cfg.ReportInterval),
+		envInt("POLL_INTERVAL", &cfg.PollInterval),
+		envInt("RATE_LIMIT", &cfg.RateLimit),
+	} {
 		if err != nil {
-			return cfg, fmt.Errorf("REPORT_INTERVAL: %w", err)
+			return cfg, err
 		}
-		cfg.ReportInterval = n
-	}
-	if v, ok := os.LookupEnv("POLL_INTERVAL"); ok {
-		n, err := strconv.Atoi(v)
-		if err != nil {
-			return cfg, fmt.Errorf("POLL_INTERVAL: %w", err)
-		}
-		cfg.PollInterval = n
-	}
-	if v, ok := os.LookupEnv("KEY"); ok {
-		cfg.Key = v
-	}
-	if v, ok := os.LookupEnv("RATE_LIMIT"); ok {
-		n, err := strconv.Atoi(v)
-		if err != nil {
-			return cfg, fmt.Errorf("RATE_LIMIT: %w", err)
-		}
-		cfg.RateLimit = n
 	}
 
 	if cfg.RateLimit <= 0 {

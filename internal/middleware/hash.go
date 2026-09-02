@@ -38,7 +38,7 @@ func (h *hashWriter) flush(key string) {
 	_, _ = h.ResponseWriter.Write(body)
 }
 
-func Hash(key string, log *zap.Logger) func(http.Handler) http.Handler {
+func HashSign(key string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		if key == "" {
 			return next
@@ -48,22 +48,38 @@ func Hash(key string, log *zap.Logger) func(http.Handler) http.Handler {
 			hw := &hashWriter{ResponseWriter: w}
 			defer hw.flush(key)
 
-			if got := r.Header.Get(hash.Header); got != "" {
-				body, err := io.ReadAll(r.Body)
-				if err != nil {
-					log.Warn("не прочитал тело запроса", zap.Error(err))
-					http.Error(hw, "не прочитал тело запроса", http.StatusBadRequest)
-					return
-				}
-				if !hash.Valid(body, key, got) {
-					log.Warn("подпись запроса не совпала", zap.String("uri", r.RequestURI))
-					http.Error(hw, "подпись не совпала", http.StatusBadRequest)
-					return
-				}
-				r.Body = io.NopCloser(bytes.NewReader(body))
+			next.ServeHTTP(hw, r)
+		})
+	}
+}
+
+func HashCheck(key string, log *zap.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		if key == "" {
+			return next
+		}
+
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			got := r.Header.Get(hash.Header)
+			if got == "" {
+				next.ServeHTTP(w, r)
+				return
 			}
 
-			next.ServeHTTP(hw, r)
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				log.Warn("не прочитал тело запроса", zap.Error(err))
+				http.Error(w, "не прочитал тело запроса", http.StatusBadRequest)
+				return
+			}
+			if !hash.Valid(body, key, got) {
+				log.Warn("подпись запроса не совпала", zap.String("uri", r.RequestURI))
+				http.Error(w, "подпись не совпала", http.StatusBadRequest)
+				return
+			}
+			r.Body = io.NopCloser(bytes.NewReader(body))
+
+			next.ServeHTTP(w, r)
 		})
 	}
 }

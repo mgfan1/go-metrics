@@ -72,12 +72,12 @@ func report(t *testing.T, a *Agent) {
 	a.deliver(t.Context(), a.snapshot(), a.log)
 }
 
-func gaugeJob() job {
+func gaugeReportJob() reportJob {
 	value := 1.0
-	return job{batch: []models.Metrics{{ID: "Alloc", MType: models.Gauge, Value: &value}}}
+	return reportJob{batch: []models.Metrics{{ID: "Alloc", MType: models.Gauge, Value: &value}}}
 }
 
-func batchOf(n int) job {
+func batchOf(n int) reportJob {
 	delta := int64(5)
 
 	batch := make([]models.Metrics, 0, n)
@@ -87,7 +87,7 @@ func batchOf(n int) job {
 		batch = append(batch, models.Metrics{ID: "Gauge" + strconv.Itoa(i), MType: models.Gauge, Value: &value})
 	}
 
-	return job{batch: batch, delta: delta}
+	return reportJob{batch: batch, delta: delta}
 }
 
 func unpack(t *testing.T, raw []byte) []models.Metrics {
@@ -416,12 +416,20 @@ func TestWorkersRespectRateLimit(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := newAgent(srv.URL, "")
-	a.rateLimit = limit
+	a := New(config.Agent{
+		Addr:           strings.TrimPrefix(srv.URL, "http://"),
+		ReportInterval: 1,
+		PollInterval:   1,
+		RateLimit:      limit,
+	}, zap.NewNop())
 
-	jobs := make(chan job, 9)
+	transport, ok := a.client.Transport.(*http.Transport)
+	require.True(t, ok, "без транспорта не снять его лимит и параллелизм режет он, а не пул воркеров")
+	transport.MaxConnsPerHost = 0
+
+	jobs := make(chan reportJob, 9)
 	for range cap(jobs) {
-		jobs <- gaugeJob()
+		jobs <- gaugeReportJob()
 	}
 	close(jobs)
 
@@ -432,6 +440,14 @@ func TestWorkersRespectRateLimit(t *testing.T) {
 
 	assert.LessOrEqual(t, peak, limit, "запросов в полёте больше лимита")
 	assert.Greater(t, peak, 1, "воркеры отправляли по очереди")
+}
+
+func TestNewLimitsConnectionsPerHost(t *testing.T) {
+	a := New(config.Agent{Addr: "localhost:8080", ReportInterval: 10, PollInterval: 2, RateLimit: 5}, zap.NewNop())
+
+	transport, ok := a.client.Transport.(*http.Transport)
+	require.True(t, ok)
+	assert.Equal(t, 5, transport.MaxConnsPerHost, "лимит запросов не дошёл до транспорта")
 }
 
 func TestNewFallsBackToSingleWorker(t *testing.T) {
@@ -465,27 +481,17 @@ func TestSplitFeedsEveryWorker(t *testing.T) {
 	assert.Equal(t, src.delta, delta, "дельта задвоилась или потерялась")
 }
 
-func TestSplitFollowsCounterPosition(t *testing.T) {
-	src := batchOf(51)
-	src.batch = append(src.batch[1:], src.batch[0])
+func TestSnapshotStartsWithPollCount(t *testing.T) {
+	a := newAgent("localhost:8080", "")
+	a.poll()
+	a.pollSystem()
 
-	parts := split(src, 4)
-	require.Len(t, parts, 4)
+	batch := a.snapshot().batch
+	require.NotEmpty(t, batch)
 
-	for _, p := range parts {
-		counters := 0
-		for _, m := range p.batch {
-			if m.MType == models.Counter {
-				counters++
-			}
-		}
-
-		if counters == 0 {
-			assert.Zero(t, p.delta, "дельта уехала без PollCount")
-			continue
-		}
-		assert.Equal(t, src.delta, p.delta, "дельта не у той части, что несёт PollCount")
-	}
+	first := batch[0]
+	assert.Equal(t, "PollCount", first.ID, "split отдаёт дельту первой части, PollCount обязан идти первым")
+	assert.Equal(t, models.Counter, first.MType)
 }
 
 func TestSplitKeepsOneJobForOneWorker(t *testing.T) {
@@ -512,7 +518,7 @@ func TestReportLoopSplitsBatchIntoJobs(t *testing.T) {
 	a.reportInterval = 10 * time.Millisecond
 	a.poll()
 
-	jobs := make(chan job, 2*a.rateLimit)
+	jobs := make(chan reportJob, 2*a.rateLimit)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -547,17 +553,37 @@ func TestReportLoopSplitsBatchIntoJobs(t *testing.T) {
 	assert.Equal(t, 1, counters)
 }
 
-func TestQueueOverflowKeepsPollCount(t *testing.T) {
+func TestReportLoopWaitsForQueueAndKeepsPollCount(t *testing.T) {
 	a := newAgent("localhost:8080", "")
 	a.reportInterval = 10 * time.Millisecond
 	a.poll()
 
-	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	a.reportLoop(ctx, make(chan job))
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		a.reportLoop(ctx, make(chan reportJob))
+	}()
 
-	assert.Equal(t, int64(1), a.pollCount.Load(), "при переполнении очереди счётчик опросов терять нельзя")
+	require.Eventually(t, func() bool { return a.pollCount.Load() == 0 }, time.Second, time.Millisecond, "reportLoop не снял снапшот")
+
+	select {
+	case <-done:
+		t.Fatal("reportLoop не стал ждать места в очереди")
+	default:
+	}
+
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("reportLoop не вышел по отмене контекста")
+	}
+
+	assert.Equal(t, int64(1), a.pollCount.Load(), "дельта не дождавшейся очереди части потерялась")
 }
 
 func TestRunStopsOnCancel(t *testing.T) {

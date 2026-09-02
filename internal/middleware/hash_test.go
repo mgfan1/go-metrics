@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"compress/gzip"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -41,9 +42,15 @@ func serve(key, signature string) (*httptest.ResponseRecorder, bool) {
 	}
 
 	rec := httptest.NewRecorder()
-	Hash(key, zap.NewNop())(echo(&called)).ServeHTTP(rec, req)
+	hashChain(key)(echo(&called)).ServeHTTP(rec, req)
 
 	return rec, called
+}
+
+func hashChain(key string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return HashSign(key)(HashCheck(key, zap.NewNop())(next))
+	}
 }
 
 func TestHashWithoutKeyPassesEverything(t *testing.T) {
@@ -102,7 +109,7 @@ func TestHashSignsEmptyBody(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/ping", nil)
 	rec := httptest.NewRecorder()
 
-	Hash("ключ", zap.NewNop())(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	hashChain("ключ")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})).ServeHTTP(rec, req)
 
@@ -126,10 +133,46 @@ func TestHashKeepsFirstStatus(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/value/gauge/Alloc", nil)
 	rec := httptest.NewRecorder()
 
-	Hash("ключ", zap.NewNop())(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	hashChain("ключ")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		w.WriteHeader(http.StatusOK)
 	})).ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+func TestHashChainBlocksFlush(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/updates/", strings.NewReader(body))
+	req.Header.Set("Accept-Encoding", "gzip")
+	rec := httptest.NewRecorder()
+
+	var flushErr error
+	handler := Logging(zap.NewNop())(Gzip(HashSign("ключ")(HashCheck("ключ", zap.NewNop())(
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			flushErr = http.NewResponseController(w).Flush()
+			_, _ = w.Write([]byte(body))
+		})))))
+
+	handler.ServeHTTP(rec, req)
+
+	require.ErrorIs(t, flushErr, http.ErrNotSupported, "Flush сквозь буферизующие обёртки отдал бы ответ без подписи")
+
+	res := rec.Result()
+	defer func() { _ = res.Body.Close() }()
+
+	assert.Equal(t, http.StatusOK, res.StatusCode)
+	assert.Equal(t, "gzip", res.Header.Get("Content-Encoding"))
+
+	signature := res.Header.Get(hash.Header)
+	require.NotEmpty(t, signature, "ответ не подписан")
+
+	zr, err := gzip.NewReader(res.Body)
+	require.NoError(t, err)
+	plain, err := io.ReadAll(zr)
+	require.NoError(t, err, "gzip-поток оборван")
+	require.NoError(t, zr.Close())
+
+	assert.Equal(t, body, string(plain))
+	assert.True(t, hash.Valid(plain, "ключ", signature), "подпись не сходится с распакованным телом")
 }

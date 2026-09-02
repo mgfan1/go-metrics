@@ -12,7 +12,8 @@ func (h *MetricsHandler) Router(log *zap.Logger, key string) chi.Router {
 
 	r.Use(middleware.Logging(log))
 	r.Use(middleware.Gzip)
-	r.Use(middleware.Hash(key, log))
+	r.Use(middleware.HashSign(key))
+	r.Use(middleware.HashCheck(key, log))
 
 	r.Get("/", h.List)
 	r.Get("/ping", h.Ping)

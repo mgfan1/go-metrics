@@ -51,6 +51,16 @@ func TestServerBadStoreInterval(t *testing.T) {
 
 	_, err := ParseServer()
 	require.Error(t, err)
+	assert.ErrorContains(t, err, "STORE_INTERVAL")
+}
+
+func TestServerBadRestore(t *testing.T) {
+	withArgs(t)
+	t.Setenv("RESTORE", "maybe")
+
+	_, err := ParseServer()
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "RESTORE")
 }
 
 func TestAgentKeyFromFlag(t *testing.T) {
@@ -103,6 +113,7 @@ func TestAgentBadRateLimit(t *testing.T) {
 
 	_, err := ParseAgent()
 	require.Error(t, err)
+	assert.ErrorContains(t, err, "RATE_LIMIT")
 }
 
 func TestAgentRejectsNonPositiveIntervals(t *testing.T) {
