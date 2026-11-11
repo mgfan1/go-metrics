@@ -4,13 +4,16 @@ import (
 	"context"
 	"errors"
 	"html/template"
+	"net"
 	"net/http"
 	"sort"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"go.uber.org/zap"
 
+	"github.com/mgfan1/go-metrics/internal/audit"
 	models "github.com/mgfan1/go-metrics/internal/model"
 	"github.com/mgfan1/go-metrics/internal/storage"
 )
@@ -19,14 +22,19 @@ type Pinger interface {
 	PingContext(ctx context.Context) error
 }
 
-type MetricsHandler struct {
-	store storage.Repository
-	db    Pinger
-	log   *zap.Logger
+type Auditor interface {
+	Publish(e audit.Event)
 }
 
-func New(store storage.Repository, db Pinger, log *zap.Logger) *MetricsHandler {
-	return &MetricsHandler{store: store, db: db, log: log}
+type MetricsHandler struct {
+	store   storage.Repository
+	db      Pinger
+	auditor Auditor
+	log     *zap.Logger
+}
+
+func New(store storage.Repository, db Pinger, auditor Auditor, log *zap.Logger) *MetricsHandler {
+	return &MetricsHandler{store: store, db: db, auditor: auditor, log: log}
 }
 
 func (h *MetricsHandler) Update(w http.ResponseWriter, r *http.Request) {
@@ -62,6 +70,8 @@ func (h *MetricsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "неизвестный тип метрики", http.StatusBadRequest)
 		return
 	}
+
+	h.audit(r, models.Metrics{ID: name})
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
@@ -103,6 +113,31 @@ func (h *MetricsHandler) readFailed(w http.ResponseWriter, r *http.Request, err 
 	}
 	h.log.Warn("не прочитал метрику", zap.Error(err))
 	http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+}
+
+func (h *MetricsHandler) audit(r *http.Request, metrics ...models.Metrics) {
+	if h.auditor == nil || len(metrics) == 0 {
+		return
+	}
+
+	names := make([]string, len(metrics))
+	for i, m := range metrics {
+		names[i] = m.ID
+	}
+
+	h.auditor.Publish(audit.Event{
+		TS:        time.Now().Unix(),
+		Metrics:   names,
+		IPAddress: clientIP(r),
+	})
+}
+
+func clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }
 
 type metricRow struct {

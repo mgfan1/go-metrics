@@ -11,6 +11,8 @@ type Server struct {
 	Restore       bool
 	DatabaseDSN   string
 	Key           string
+	AuditFile     string
+	AuditURL      string
 }
 
 func ParseServer() (Server, error) {
@@ -22,12 +24,16 @@ func ParseServer() (Server, error) {
 	flag.BoolVar(&cfg.Restore, "r", true, "загружать сохранённые метрики при старте")
 	flag.StringVar(&cfg.DatabaseDSN, "d", "", "строка подключения к базе данных")
 	flag.StringVar(&cfg.Key, "k", "", "ключ подписи передаваемых данных")
+	flag.StringVar(&cfg.AuditFile, "audit-file", "", "файл для событий аудита, без него аудит в файл выключен")
+	flag.StringVar(&cfg.AuditURL, "audit-url", "", "адрес приёмника событий аудита, без него отправка выключена")
 	flag.Parse()
 
 	envString("ADDRESS", &cfg.Addr)
 	envString("FILE_STORAGE_PATH", &cfg.FileStorage)
 	envString("DATABASE_DSN", &cfg.DatabaseDSN)
 	envString("KEY", &cfg.Key)
+	envString("AUDIT_FILE", &cfg.AuditFile)
+	envString("AUDIT_URL", &cfg.AuditURL)
 
 	for _, err := range []error{
 		envInt("STORE_INTERVAL", &cfg.StoreInterval),
