@@ -15,11 +15,13 @@ const remoteTimeout = 5 * time.Second
 
 var _ Observer = (*HTTPObserver)(nil)
 
+// HTTPObserver отправляет события POST-запросом на удалённый приёмник.
 type HTTPObserver struct {
 	endpoint string
 	client   *http.Client
 }
 
+// NewHTTPObserver проверяет адрес endpoint и создаёт наблюдателя для удалённого приёмника.
 func NewHTTPObserver(endpoint string) (*HTTPObserver, error) {
 	u, err := url.ParseRequestURI(endpoint)
 	if err != nil {
@@ -35,6 +37,7 @@ func NewHTTPObserver(endpoint string) (*HTTPObserver, error) {
 	}, nil
 }
 
+// Notify отправляет событие в JSON и считает ошибкой любой ответ, кроме 2xx.
 func (o *HTTPObserver) Notify(ctx context.Context, e Event) error {
 	body, err := json.Marshal(e)
 	if err != nil {

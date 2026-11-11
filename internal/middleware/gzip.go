@@ -79,6 +79,7 @@ func compressible(contentType string) bool {
 		strings.Contains(contentType, "text/html")
 }
 
+// Gzip распаковывает тела запросов в gzip и сжимает ответы JSON и HTML для клиентов, которые принимают gzip.
 func Gzip(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.Header.Get("Content-Encoding"), "gzip") {

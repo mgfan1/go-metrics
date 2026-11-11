@@ -4,17 +4,19 @@ import (
 	"flag"
 )
 
+// Server хранит настройки сервера.
 type Server struct {
-	Addr          string
-	StoreInterval int
-	FileStorage   string
-	Restore       bool
-	DatabaseDSN   string
-	Key           string
-	AuditFile     string
-	AuditURL      string
+	Addr          string // адрес и порт сервера
+	StoreInterval int    // период сохранения в файл в секундах, 0 значит писать сразу
+	FileStorage   string // файл для хранения метрик
+	Restore       bool   // загружать метрики из файла при старте
+	DatabaseDSN   string // строка подключения к PostgreSQL
+	Key           string // ключ подписи запросов и ответов
+	AuditFile     string // файл для событий аудита
+	AuditURL      string // адрес приёмника событий аудита
 }
 
+// ParseServer читает настройки сервера.
 func ParseServer() (Server, error) {
 	var cfg Server
 

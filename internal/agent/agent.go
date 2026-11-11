@@ -1,3 +1,4 @@
+// Package agent собирает метрики runtime и системы и отправляет их на сервер.
 package agent
 
 import (
@@ -38,6 +39,7 @@ type reportJob struct {
 	delta int64
 }
 
+// Agent опрашивает метрики и отправляет их на сервер батчами через пул воркеров.
 type Agent struct {
 	baseURL        string
 	pollInterval   time.Duration
@@ -52,6 +54,7 @@ type Agent struct {
 	retrier        *retry.Retrier
 }
 
+// New создаёт агента по конфигурации cfg.
 func New(cfg config.Agent, log *zap.Logger) *Agent {
 	rateLimit := max(cfg.RateLimit, 1)
 
@@ -73,6 +76,7 @@ func New(cfg config.Agent, log *zap.Logger) *Agent {
 	}
 }
 
+// Run собирает и отправляет метрики, пока не отменён ctx.
 func (a *Agent) Run(ctx context.Context) {
 	a.poll()
 	a.pollSystem()

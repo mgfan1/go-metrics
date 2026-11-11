@@ -1,3 +1,4 @@
+// Package server запускает HTTP-сервер и штатно останавливает его по отмене контекста.
 package server
 
 import (
@@ -11,11 +12,13 @@ import (
 
 const shutdownTimeout = 5 * time.Second
 
+// Server обслуживает HTTP-запросы до отмены контекста.
 type Server struct {
 	http *http.Server
 	log  *zap.Logger
 }
 
+// New создаёт сервер на адресе addr с обработчиком handler.
 func New(addr string, handler http.Handler, log *zap.Logger) *Server {
 	return &Server{
 		http: &http.Server{Addr: addr, Handler: handler},
@@ -23,6 +26,7 @@ func New(addr string, handler http.Handler, log *zap.Logger) *Server {
 	}
 }
 
+// Run принимает запросы до отмены ctx, затем штатно останавливает сервер.
 func (s *Server) Run(ctx context.Context) error {
 	stopped := make(chan struct{})
 

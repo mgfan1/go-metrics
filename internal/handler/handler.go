@@ -18,14 +18,19 @@ import (
 	"github.com/mgfan1/go-metrics/internal/storage"
 )
 
+// Pinger проверяет соединение с базой данных.
 type Pinger interface {
+	// PingContext возвращает ошибку, если база не отвечает.
 	PingContext(ctx context.Context) error
 }
 
+// Auditor принимает события аудита полученных метрик.
 type Auditor interface {
+	// Publish передаёт событие на аудит без ожидания доставки.
 	Publish(e audit.Event)
 }
 
+// MetricsHandler обслуживает HTTP API метрик.
 type MetricsHandler struct {
 	store   storage.Repository
 	db      Pinger
@@ -33,10 +38,12 @@ type MetricsHandler struct {
 	log     *zap.Logger
 }
 
+// New создаёт MetricsHandler поверх store, без db /ping всегда отвечает 200, без auditor аудит выключен.
 func New(store storage.Repository, db Pinger, auditor Auditor, log *zap.Logger) *MetricsHandler {
 	return &MetricsHandler{store: store, db: db, auditor: auditor, log: log}
 }
 
+// Update обрабатывает POST /update/{type}/{name}/{value}: сохраняет gauge или прибавляет значение к counter.
 func (h *MetricsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	if name == "" {
@@ -77,6 +84,7 @@ func (h *MetricsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+// Value обрабатывает GET /value/{type}/{name} и отдаёт значение метрики текстом.
 func (h *MetricsHandler) Value(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -156,6 +164,7 @@ var listPage = template.Must(template.New("list").Parse(
 </body>
 </html>`))
 
+// List обрабатывает GET / и отдаёт HTML-страницу со всеми метриками.
 func (h *MetricsHandler) List(w http.ResponseWriter, r *http.Request) {
 	gauges, counters, err := h.store.Snapshot(r.Context())
 	if err != nil {

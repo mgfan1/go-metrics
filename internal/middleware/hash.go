@@ -58,6 +58,7 @@ func (h *hashWriter) flush(key string) {
 	_, _ = h.ResponseWriter.Write(body)
 }
 
+// HashSign подписывает каждый ответ ключом key, пустой key подпись отключает.
 func HashSign(key string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		if key == "" {
@@ -76,6 +77,7 @@ func HashSign(key string) func(http.Handler) http.Handler {
 	}
 }
 
+// HashCheck отклоняет кодом 400 запрос с неверной подписью тела, запрос без подписи пропускает.
 func HashCheck(key string, log *zap.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		if key == "" {

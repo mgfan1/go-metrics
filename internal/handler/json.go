@@ -9,6 +9,7 @@ import (
 	models "github.com/mgfan1/go-metrics/internal/model"
 )
 
+// UpdateJSON обрабатывает POST /update/ с метрикой в JSON и возвращает её новое значение.
 func (h *MetricsHandler) UpdateJSON(w http.ResponseWriter, r *http.Request) {
 	var m models.Metrics
 	if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
@@ -56,6 +57,7 @@ func (h *MetricsHandler) UpdateJSON(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, m)
 }
 
+// UpdatesJSON обрабатывает POST /updates/ с батчем метрик, при ошибке в любой метрике батч не применяется.
 func (h *MetricsHandler) UpdatesJSON(w http.ResponseWriter, r *http.Request) {
 	var metrics []models.Metrics
 	if err := json.NewDecoder(r.Body).Decode(&metrics); err != nil {
@@ -98,6 +100,7 @@ func (h *MetricsHandler) UpdatesJSON(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, metrics)
 }
 
+// ValueJSON обрабатывает POST /value/ и возвращает метрику с текущим значением.
 func (h *MetricsHandler) ValueJSON(w http.ResponseWriter, r *http.Request) {
 	var m models.Metrics
 	if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
