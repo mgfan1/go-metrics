@@ -29,6 +29,10 @@ import (
 
 const minPartSize = 10
 
+var gzipWriters = sync.Pool{
+	New: func() any { return gzip.NewWriter(io.Discard) },
+}
+
 type reportJob struct {
 	batch []models.Metrics
 	delta int64
@@ -268,16 +272,12 @@ func (a *Agent) send(ctx context.Context, batch []models.Metrics) error {
 		return err
 	}
 
-	var buf bytes.Buffer
-	gz := gzip.NewWriter(&buf)
-	if _, err := gz.Write(body); err != nil {
-		return err
-	}
-	if err := gz.Close(); err != nil {
+	compressed, err := compress(body)
+	if err != nil {
 		return err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.baseURL+"/updates/", &buf)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.baseURL+"/updates/", compressed)
 	if err != nil {
 		return err
 	}
@@ -300,4 +300,23 @@ func (a *Agent) send(ctx context.Context, batch []models.Metrics) error {
 	}
 
 	return nil
+}
+
+func compress(body []byte) (*bytes.Buffer, error) {
+	zw := gzipWriters.Get().(*gzip.Writer)
+	defer func() {
+		zw.Reset(io.Discard)
+		gzipWriters.Put(zw)
+	}()
+
+	var buf bytes.Buffer
+	zw.Reset(&buf)
+	if _, err := zw.Write(body); err != nil {
+		return nil, err
+	}
+	if err := zw.Close(); err != nil {
+		return nil, err
+	}
+
+	return &buf, nil
 }
