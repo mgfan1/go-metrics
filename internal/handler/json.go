@@ -52,6 +52,7 @@ func (h *MetricsHandler) UpdateJSON(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.audit(r, m)
 	h.writeJSON(w, m)
 }
 
@@ -93,6 +94,7 @@ func (h *MetricsHandler) UpdatesJSON(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.audit(r, metrics...)
 	h.writeJSON(w, metrics)
 }
 
