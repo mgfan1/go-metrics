@@ -4,15 +4,35 @@ import (
 	"bytes"
 	"io"
 	"net/http"
+	"sync"
 
 	"go.uber.org/zap"
 
 	"github.com/mgfan1/go-metrics/internal/hash"
 )
 
+const maxPooledBuffer = 64 << 10
+
+var buffers = sync.Pool{
+	New: func() any { return new(bytes.Buffer) },
+}
+
+func getBuffer() *bytes.Buffer {
+	buf := buffers.Get().(*bytes.Buffer)
+	buf.Reset()
+	return buf
+}
+
+func putBuffer(buf *bytes.Buffer) {
+	if buf.Cap() > maxPooledBuffer {
+		return
+	}
+	buffers.Put(buf)
+}
+
 type hashWriter struct {
 	http.ResponseWriter
-	buf    bytes.Buffer
+	buf    *bytes.Buffer
 	status int
 }
 
@@ -38,6 +58,7 @@ func (h *hashWriter) flush(key string) {
 	_, _ = h.ResponseWriter.Write(body)
 }
 
+// HashSign подписывает каждый ответ ключом key, пустой key подпись отключает.
 func HashSign(key string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		if key == "" {
@@ -45,7 +66,10 @@ func HashSign(key string) func(http.Handler) http.Handler {
 		}
 
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			hw := &hashWriter{ResponseWriter: w}
+			buf := getBuffer()
+			defer putBuffer(buf)
+
+			hw := &hashWriter{ResponseWriter: w, buf: buf}
 			defer hw.flush(key)
 
 			next.ServeHTTP(hw, r)
@@ -53,6 +77,7 @@ func HashSign(key string) func(http.Handler) http.Handler {
 	}
 }
 
+// HashCheck отклоняет кодом 400 запрос с неверной подписью тела, запрос без подписи пропускает.
 func HashCheck(key string, log *zap.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		if key == "" {
@@ -66,12 +91,15 @@ func HashCheck(key string, log *zap.Logger) func(http.Handler) http.Handler {
 				return
 			}
 
-			body, err := io.ReadAll(r.Body)
-			if err != nil {
+			buf := getBuffer()
+			defer putBuffer(buf)
+
+			if _, err := buf.ReadFrom(r.Body); err != nil {
 				log.Warn("не прочитал тело запроса", zap.Error(err))
 				http.Error(w, "не прочитал тело запроса", http.StatusBadRequest)
 				return
 			}
+			body := buf.Bytes()
 			if !hash.Valid(body, key, got) {
 				log.Warn("подпись запроса не совпала", zap.String("uri", r.RequestURI))
 				http.Error(w, "подпись не совпала", http.StatusBadRequest)

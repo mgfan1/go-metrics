@@ -19,7 +19,7 @@ import (
 
 func newTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
-	h := New(storage.NewMemStorage(), nil, zap.NewNop())
+	h := New(storage.NewMemStorage(), nil, nil, zap.NewNop())
 	return httptest.NewServer(h.Router(zap.NewNop(), ""))
 }
 
@@ -120,7 +120,7 @@ func TestStorageErrorGivesServerError(t *testing.T) {
 			store := mocks.NewRepository(t)
 			c.expect(store)
 
-			ts := httptest.NewServer(New(store, nil, zap.NewNop()).Router(zap.NewNop(), ""))
+			ts := httptest.NewServer(New(store, nil, nil, zap.NewNop()).Router(zap.NewNop(), ""))
 			defer ts.Close()
 
 			code, _ := do(t, ts, c.method, c.path)
@@ -133,7 +133,7 @@ func TestBatchStorageErrorGivesServerError(t *testing.T) {
 	store := mocks.NewRepository(t)
 	store.On("UpdateBatch", mock.Anything, mock.Anything).Return(errors.New("база упала"))
 
-	ts := httptest.NewServer(New(store, nil, zap.NewNop()).Router(zap.NewNop(), ""))
+	ts := httptest.NewServer(New(store, nil, nil, zap.NewNop()).Router(zap.NewNop(), ""))
 	defer ts.Close()
 
 	resp, _ := postJSON(t, ts, "/updates/", `[{"id":"Alloc","type":"gauge","value":1.5}]`)

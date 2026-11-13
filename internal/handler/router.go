@@ -7,6 +7,7 @@ import (
 	"github.com/mgfan1/go-metrics/internal/middleware"
 )
 
+// Router собирает маршруты API с логированием, gzip и подписью, пустой key подпись отключает.
 func (h *MetricsHandler) Router(log *zap.Logger, key string) chi.Router {
 	r := chi.NewRouter()
 

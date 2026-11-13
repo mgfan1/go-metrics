@@ -12,7 +12,7 @@ import (
 func withArgs(t *testing.T, args ...string) {
 	t.Helper()
 
-	for _, name := range []string{"ADDRESS", "REPORT_INTERVAL", "POLL_INTERVAL", "KEY", "RATE_LIMIT", "STORE_INTERVAL", "FILE_STORAGE_PATH", "RESTORE", "DATABASE_DSN"} {
+	for _, name := range []string{"ADDRESS", "REPORT_INTERVAL", "POLL_INTERVAL", "KEY", "RATE_LIMIT", "STORE_INTERVAL", "FILE_STORAGE_PATH", "RESTORE", "DATABASE_DSN", "AUDIT_FILE", "AUDIT_URL"} {
 		t.Setenv(name, "")
 		require.NoError(t, os.Unsetenv(name))
 	}
@@ -43,6 +43,35 @@ func TestServerEnvBeatsFlag(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "настоящий ключ", cfg.Key)
 	assert.Equal(t, "localhost:8081", cfg.Addr)
+}
+
+func TestServerAuditOffByDefault(t *testing.T) {
+	withArgs(t)
+
+	cfg, err := ParseServer()
+	require.NoError(t, err)
+	assert.Empty(t, cfg.AuditFile)
+	assert.Empty(t, cfg.AuditURL)
+}
+
+func TestServerAuditFromFlags(t *testing.T) {
+	withArgs(t, "--audit-file", "/tmp/audit.log", "--audit-url", "http://localhost:9000/audit")
+
+	cfg, err := ParseServer()
+	require.NoError(t, err)
+	assert.Equal(t, "/tmp/audit.log", cfg.AuditFile)
+	assert.Equal(t, "http://localhost:9000/audit", cfg.AuditURL)
+}
+
+func TestServerAuditEnvBeatsFlags(t *testing.T) {
+	withArgs(t, "--audit-file", "/tmp/flag.log", "--audit-url", "http://flag/audit")
+	t.Setenv("AUDIT_FILE", "/var/log/audit.log")
+	t.Setenv("AUDIT_URL", "http://audit.local/events")
+
+	cfg, err := ParseServer()
+	require.NoError(t, err)
+	assert.Equal(t, "/var/log/audit.log", cfg.AuditFile)
+	assert.Equal(t, "http://audit.local/events", cfg.AuditURL)
 }
 
 func TestServerBadStoreInterval(t *testing.T) {

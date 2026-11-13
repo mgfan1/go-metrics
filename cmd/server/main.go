@@ -1,3 +1,4 @@
+// Сервер сбора метрик принимает данные агентов по HTTP и хранит их в памяти, в JSON-файле или в PostgreSQL.
 package main
 
 import (
@@ -12,6 +13,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"go.uber.org/zap"
 
+	"github.com/mgfan1/go-metrics/internal/audit"
 	"github.com/mgfan1/go-metrics/internal/config"
 	"github.com/mgfan1/go-metrics/internal/handler"
 	"github.com/mgfan1/go-metrics/internal/server"
@@ -96,7 +98,23 @@ func run(logger *zap.Logger) error {
 		}
 	}
 
-	metrics := handler.New(repo, pinger, logger.With(zap.String("component", "handler")))
+	var auditor handler.Auditor
+	if cfg.AuditFile != "" || cfg.AuditURL != "" {
+		pub, err := newAudit(cfg, logger.With(zap.String("component", "audit")))
+		if err != nil {
+			return err
+		}
+		defer func() {
+			if err := pub.Close(); err != nil {
+				logger.Warn("не закрыл аудит", zap.Error(err))
+			}
+		}()
+
+		auditor = pub
+		logger.Info("аудит включён", zap.String("file", cfg.AuditFile), zap.String("url", cfg.AuditURL))
+	}
+
+	metrics := handler.New(repo, pinger, auditor, logger.With(zap.String("component", "handler")))
 	router := metrics.Router(logger.With(zap.String("component", "middleware")), cfg.Key)
 	srv := server.New(cfg.Addr, router, logger.With(zap.String("component", "server")))
 
@@ -112,4 +130,30 @@ func run(logger *zap.Logger) error {
 	}
 
 	return nil
+}
+
+func newAudit(cfg config.Server, log *zap.Logger) (*audit.Publisher, error) {
+	var observers []audit.Observer
+
+	if cfg.AuditURL != "" {
+		remote, err := audit.NewHTTPObserver(cfg.AuditURL)
+		if err != nil {
+			return nil, err
+		}
+		observers = append(observers, remote)
+	}
+	if cfg.AuditFile != "" {
+		file, err := audit.NewFileObserver(cfg.AuditFile)
+		if err != nil {
+			return nil, err
+		}
+		observers = append(observers, file)
+	}
+
+	pub := audit.NewPublisher(log)
+	for _, o := range observers {
+		pub.Register(o)
+	}
+
+	return pub, nil
 }

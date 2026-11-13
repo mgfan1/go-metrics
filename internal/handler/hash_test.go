@@ -18,7 +18,7 @@ const key = "ключ"
 
 func newSignedServer(t *testing.T) *httptest.Server {
 	t.Helper()
-	h := New(storage.NewMemStorage(), nil, zap.NewNop())
+	h := New(storage.NewMemStorage(), nil, nil, zap.NewNop())
 	return httptest.NewServer(h.Router(zap.NewNop(), key))
 }
 
