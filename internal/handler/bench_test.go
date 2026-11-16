@@ -38,6 +38,8 @@ func agentBatch(tb testing.TB) []models.Metrics {
 }
 
 func serveOK(b *testing.B, router http.Handler, req *http.Request) {
+	b.Helper()
+
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {

@@ -9,8 +9,10 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -19,6 +21,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
+
+	"github.com/mgfan1/go-metrics/internal/retry"
 )
 
 type recorder struct {
@@ -225,6 +229,56 @@ type receivedRequest struct {
 	decodeErr   error
 }
 
+func TestFileObserverConcurrentNotify(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.log")
+	o, err := NewFileObserver(path)
+	require.NoError(t, err)
+
+	metrics := make([]string, 200)
+	for i := range metrics {
+		metrics[i] = "Gauge" + strconv.Itoa(i)
+	}
+
+	var wg sync.WaitGroup
+	for i := range 20 {
+		wg.Go(func() {
+			for j := range 50 {
+				_ = o.Notify(t.Context(), Event{TS: int64(i*100 + j), Metrics: metrics, IPAddress: "192.0.2.1"})
+			}
+		})
+	}
+	wg.Wait()
+	require.NoError(t, o.Close())
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	lines := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
+	require.Len(t, lines, 1000)
+	for _, line := range lines {
+		var e Event
+		require.NoError(t, json.Unmarshal([]byte(line), &e), "строки событий перемешались")
+	}
+}
+
+func newTestObserver(t *testing.T, endpoint string) *HTTPObserver {
+	t.Helper()
+
+	o, err := NewHTTPObserver(endpoint, zap.NewNop())
+	require.NoError(t, err)
+	o.retrier = retry.New(zap.NewNop(), time.Millisecond, time.Millisecond, time.Millisecond)
+	return o
+}
+
+func replyWith(codes ...int) (*httptest.Server, *atomic.Int32) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		n := int(calls.Add(1))
+		w.WriteHeader(codes[min(n, len(codes))-1])
+	}))
+	return srv, &calls
+}
+
 func TestHTTPObserverPostsEvent(t *testing.T) {
 	received := make(chan receivedRequest, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
@@ -234,11 +288,8 @@ func TestHTTPObserverPostsEvent(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	o, err := NewHTTPObserver(srv.URL + "/audit")
-	require.NoError(t, err)
-
 	e := Event{TS: 5, Metrics: []string{"Alloc", "PollCount"}, IPAddress: "192.0.2.1"}
-	require.NoError(t, o.Notify(t.Context(), e))
+	require.NoError(t, newTestObserver(t, srv.URL+"/audit").Notify(t.Context(), e))
 
 	got := <-received
 	require.NoError(t, got.decodeErr)
@@ -247,22 +298,33 @@ func TestHTTPObserverPostsEvent(t *testing.T) {
 	assert.Equal(t, e, got.event)
 }
 
-func TestHTTPObserverFailsOnBadStatus(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusServiceUnavailable)
-	}))
+func TestHTTPObserverRetriesServerErrors(t *testing.T) {
+	srv, calls := replyWith(http.StatusServiceUnavailable, http.StatusBadGateway, http.StatusOK)
 	defer srv.Close()
 
-	o, err := NewHTTPObserver(srv.URL)
-	require.NoError(t, err)
+	require.NoError(t, newTestObserver(t, srv.URL).Notify(t.Context(), Event{TS: 1}))
+	assert.Equal(t, int32(3), calls.Load())
+}
 
-	assert.ErrorContains(t, o.Notify(t.Context(), Event{TS: 1}), "503")
+func TestHTTPObserverGivesUpAfterRetries(t *testing.T) {
+	srv, calls := replyWith(http.StatusServiceUnavailable)
+	defer srv.Close()
+
+	assert.ErrorContains(t, newTestObserver(t, srv.URL).Notify(t.Context(), Event{TS: 1}), "503")
+	assert.Equal(t, int32(4), calls.Load(), "одна попытка и три повтора")
+}
+
+func TestHTTPObserverDoesNotRetryClientErrors(t *testing.T) {
+	srv, calls := replyWith(http.StatusBadRequest)
+	defer srv.Close()
+
+	assert.ErrorContains(t, newTestObserver(t, srv.URL).Notify(t.Context(), Event{TS: 1}), "400")
+	assert.Equal(t, int32(1), calls.Load())
 }
 
 func TestHTTPObserverFailsWhenReceiverIsDown(t *testing.T) {
 	srv := httptest.NewServer(http.NotFoundHandler())
-	o, err := NewHTTPObserver(srv.URL)
-	require.NoError(t, err)
+	o := newTestObserver(t, srv.URL)
 	srv.Close()
 
 	assert.Error(t, o.Notify(t.Context(), Event{TS: 1}))
@@ -271,7 +333,7 @@ func TestHTTPObserverFailsWhenReceiverIsDown(t *testing.T) {
 func TestNewHTTPObserverRejectsBadURL(t *testing.T) {
 	for _, endpoint := range []string{"", "localhost:9000/audit", "ftp://audit.local/events", "http://", "/audit"} {
 		t.Run(endpoint, func(t *testing.T) {
-			_, err := NewHTTPObserver(endpoint)
+			_, err := NewHTTPObserver(endpoint, zap.NewNop())
 			assert.ErrorContains(t, err, "адрес приёмника аудита")
 		})
 	}

@@ -2,8 +2,6 @@
 package agent
 
 import (
-	"bytes"
-	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -22,6 +20,7 @@ import (
 	"github.com/shirou/gopsutil/v4/mem"
 	"go.uber.org/zap"
 
+	"github.com/mgfan1/go-metrics/internal/compress"
 	"github.com/mgfan1/go-metrics/internal/config"
 	"github.com/mgfan1/go-metrics/internal/hash"
 	models "github.com/mgfan1/go-metrics/internal/model"
@@ -29,10 +28,6 @@ import (
 )
 
 const minPartSize = 10
-
-var gzipWriters = sync.Pool{
-	New: func() any { return gzip.NewWriter(io.Discard) },
-}
 
 type reportJob struct {
 	batch []models.Metrics
@@ -276,7 +271,7 @@ func (a *Agent) send(ctx context.Context, batch []models.Metrics) error {
 		return err
 	}
 
-	compressed, err := compress(body)
+	compressed, err := compress.Gzip(body)
 	if err != nil {
 		return err
 	}
@@ -304,23 +299,4 @@ func (a *Agent) send(ctx context.Context, batch []models.Metrics) error {
 	}
 
 	return nil
-}
-
-func compress(body []byte) (*bytes.Buffer, error) {
-	zw := gzipWriters.Get().(*gzip.Writer)
-	defer func() {
-		zw.Reset(io.Discard)
-		gzipWriters.Put(zw)
-	}()
-
-	var buf bytes.Buffer
-	zw.Reset(&buf)
-	if _, err := zw.Write(body); err != nil {
-		return nil, err
-	}
-	if err := zw.Close(); err != nil {
-		return nil, err
-	}
-
-	return &buf, nil
 }

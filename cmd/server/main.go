@@ -136,7 +136,7 @@ func newAudit(cfg config.Server, log *zap.Logger) (*audit.Publisher, error) {
 	var observers []audit.Observer
 
 	if cfg.AuditURL != "" {
-		remote, err := audit.NewHTTPObserver(cfg.AuditURL)
+		remote, err := audit.NewHTTPObserver(cfg.AuditURL, log)
 		if err != nil {
 			return nil, err
 		}

@@ -25,6 +25,8 @@ func discardAndReply(w http.ResponseWriter, r *http.Request) {
 }
 
 func serveOK(b *testing.B, h http.Handler, req *http.Request) {
+	b.Helper()
+
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {

@@ -7,11 +7,9 @@ import (
 	"net/http"
 	"strings"
 	"sync"
-)
 
-var gzipWriters = sync.Pool{
-	New: func() any { return gzip.NewWriter(io.Discard) },
-}
+	"github.com/mgfan1/go-metrics/internal/compress"
+)
 
 var gzipReaders = sync.Pool{
 	New: func() any { return &gzipReader{buf: bufio.NewReader(nil)} },
@@ -44,8 +42,7 @@ func (g *gzipWriter) WriteHeader(status int) {
 		if compressible(g.Header().Get("Content-Type")) {
 			g.Header().Del("Content-Length")
 			g.Header().Set("Content-Encoding", "gzip")
-			g.zw = gzipWriters.Get().(*gzip.Writer)
-			g.zw.Reset(g.ResponseWriter)
+			g.zw = compress.GetWriter(g.ResponseWriter)
 		}
 	}
 	g.ResponseWriter.WriteHeader(status)
@@ -67,8 +64,7 @@ func (g *gzipWriter) Close() error {
 	}
 
 	err := g.zw.Close()
-	g.zw.Reset(io.Discard)
-	gzipWriters.Put(g.zw)
+	compress.PutWriter(g.zw)
 	g.zw = nil
 
 	return err

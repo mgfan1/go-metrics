@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sync"
 )
 
 var _ Observer = (*FileObserver)(nil)
 
-// FileObserver дописывает события в файл, по одному JSON на строку.
+// FileObserver дописывает события в файл, по одному JSON на строку и безопасен для конкурентного вызова.
 type FileObserver struct {
+	mu   sync.Mutex
 	file *os.File
 }
 
@@ -30,8 +32,12 @@ func (o *FileObserver) Notify(_ context.Context, e Event) error {
 	if err != nil {
 		return err
 	}
+	line = append(line, '\n')
 
-	_, err = o.file.Write(append(line, '\n'))
+	o.mu.Lock()
+	_, err = o.file.Write(line)
+	o.mu.Unlock()
+
 	return err
 }
 
