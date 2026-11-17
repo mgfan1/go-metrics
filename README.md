@@ -43,6 +43,15 @@ git fetch template && git checkout template/v2 .github
 - **Hexagonal Architecture**
 - **Layered Architecture**
 
+## Сборка
+
+При старте сервер и агент печатают версию, дату и коммит сборки. Значения задаются флагами линковщика, без них выводится `N/A`. Команды для bash (Linux, macOS, Git Bash):
+
+```
+go build -ldflags "-X main.buildVersion=v1.0.0 -X 'main.buildDate=$(date +'%Y-%m-%d %H:%M:%S')' -X main.buildCommit=$(git rev-parse --short HEAD)" -o cmd/server/server ./cmd/server
+go build -ldflags "-X main.buildVersion=v1.0.0 -X 'main.buildDate=$(date +'%Y-%m-%d %H:%M:%S')' -X main.buildCommit=$(git rev-parse --short HEAD)" -o cmd/agent/agent ./cmd/agent
+```
+
 ## Запуск
 
 ```
