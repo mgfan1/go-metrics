@@ -11,6 +11,8 @@ import (
 	"github.com/mgfan1/go-metrics/internal/hash"
 )
 
+//go:generate go run github.com/mgfan1/go-metrics/cmd/reset .
+
 const maxPooledBuffer = 64 << 10
 
 var buffers = sync.Pool{
@@ -30,6 +32,7 @@ func putBuffer(buf *bytes.Buffer) {
 	buffers.Put(buf)
 }
 
+// generate:reset
 type hashWriter struct {
 	http.ResponseWriter
 	buf    *bytes.Buffer

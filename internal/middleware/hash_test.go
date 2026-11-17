@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"bytes"
 	"compress/gzip"
 	"io"
 	"net/http"
@@ -139,6 +140,17 @@ func TestHashKeepsFirstStatus(t *testing.T) {
 	})).ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+func TestHashWriterReset(t *testing.T) {
+	hw := &hashWriter{ResponseWriter: httptest.NewRecorder(), buf: bytes.NewBufferString("тело"), status: http.StatusNotFound}
+
+	hw.Reset()
+
+	assert.Nil(t, hw.ResponseWriter)
+	assert.Zero(t, hw.status)
+	require.NotNil(t, hw.buf)
+	assert.Zero(t, hw.buf.Len())
 }
 
 func TestHashChainBlocksFlush(t *testing.T) {
