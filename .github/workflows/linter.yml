@@ -1,0 +1,20 @@
+name: linter
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  exitcheck:
+    runs-on: ubuntu-latest
+    container: golang:1.27
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Run project linter
+        run: |
+          go build -buildvcs=false -o /usr/local/bin/linter ./cmd/linter
+          go vet -vettool=/usr/local/bin/linter ./...
