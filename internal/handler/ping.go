@@ -10,6 +10,7 @@ import (
 
 const pingTimeout = 2 * time.Second
 
+// Ping обрабатывает GET /ping и отвечает 500, если база недоступна.
 func (h *MetricsHandler) Ping(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
 		w.WriteHeader(http.StatusOK)

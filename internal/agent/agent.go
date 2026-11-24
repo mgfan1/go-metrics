@@ -1,8 +1,7 @@
+// Package agent собирает метрики runtime и системы и отправляет их на сервер.
 package agent
 
 import (
-	"bytes"
-	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -21,6 +20,7 @@ import (
 	"github.com/shirou/gopsutil/v4/mem"
 	"go.uber.org/zap"
 
+	"github.com/mgfan1/go-metrics/internal/compress"
 	"github.com/mgfan1/go-metrics/internal/config"
 	"github.com/mgfan1/go-metrics/internal/hash"
 	models "github.com/mgfan1/go-metrics/internal/model"
@@ -34,6 +34,7 @@ type reportJob struct {
 	delta int64
 }
 
+// Agent опрашивает метрики и отправляет их на сервер батчами через пул воркеров.
 type Agent struct {
 	baseURL        string
 	pollInterval   time.Duration
@@ -48,6 +49,7 @@ type Agent struct {
 	retrier        *retry.Retrier
 }
 
+// New создаёт агента по конфигурации cfg.
 func New(cfg config.Agent, log *zap.Logger) *Agent {
 	rateLimit := max(cfg.RateLimit, 1)
 
@@ -69,6 +71,7 @@ func New(cfg config.Agent, log *zap.Logger) *Agent {
 	}
 }
 
+// Run собирает и отправляет метрики, пока не отменён ctx.
 func (a *Agent) Run(ctx context.Context) {
 	a.poll()
 	a.pollSystem()
@@ -268,16 +271,12 @@ func (a *Agent) send(ctx context.Context, batch []models.Metrics) error {
 		return err
 	}
 
-	var buf bytes.Buffer
-	gz := gzip.NewWriter(&buf)
-	if _, err := gz.Write(body); err != nil {
-		return err
-	}
-	if err := gz.Close(); err != nil {
+	compressed, err := compress.Gzip(body)
+	if err != nil {
 		return err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.baseURL+"/updates/", &buf)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.baseURL+"/updates/", compressed)
 	if err != nil {
 		return err
 	}

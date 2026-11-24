@@ -259,7 +259,7 @@ func TestReportWithoutKeyDoesNotSign(t *testing.T) {
 
 func TestAgentSendsSignedToRealServer(t *testing.T) {
 	store := storage.NewMemStorage()
-	srv := httptest.NewServer(handler.New(store, nil, zap.NewNop()).Router(zap.NewNop(), "секрет"))
+	srv := httptest.NewServer(handler.New(store, nil, nil, zap.NewNop()).Router(zap.NewNop(), "секрет"))
 	defer srv.Close()
 
 	delta := int64(3)
@@ -374,7 +374,7 @@ func TestSendReturnsErrorOnBadStatus(t *testing.T) {
 
 func TestAgentSendsToRealServer(t *testing.T) {
 	store := storage.NewMemStorage()
-	srv := httptest.NewServer(handler.New(store, nil, zap.NewNop()).Router(zap.NewNop(), ""))
+	srv := httptest.NewServer(handler.New(store, nil, nil, zap.NewNop()).Router(zap.NewNop(), ""))
 	defer srv.Close()
 
 	a := newAgent(srv.URL, "")

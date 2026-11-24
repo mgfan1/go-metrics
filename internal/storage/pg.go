@@ -31,11 +31,13 @@ const (
 	 ON CONFLICT (id, mtype) DO UPDATE SET delta = metrics.delta + EXCLUDED.delta`
 )
 
+// PGStorage хранит метрики в PostgreSQL и повторяет запросы при временных сбоях.
 type PGStorage struct {
 	db      *sql.DB
 	retrier *retry.Retrier
 }
 
+// NewPGStorage применяет миграции и создаёт хранилище поверх db.
 func NewPGStorage(ctx context.Context, db *sql.DB, log *zap.Logger) (*PGStorage, error) {
 	s := &PGStorage{db: db, retrier: retry.New(log)}
 
@@ -107,6 +109,7 @@ func applyMigrations(ctx context.Context, db *sql.DB, src fs.FS, path string) er
 	return nil
 }
 
+// UpdateGauge сохраняет значение gauge.
 func (s *PGStorage) UpdateGauge(ctx context.Context, name string, value float64) error {
 	return s.retry(ctx, func() error {
 		_, err := s.db.ExecContext(ctx, upsertGauge, name, value)
@@ -114,6 +117,7 @@ func (s *PGStorage) UpdateGauge(ctx context.Context, name string, value float64)
 	})
 }
 
+// AddCounter прибавляет delta к counter.
 func (s *PGStorage) AddCounter(ctx context.Context, name string, delta int64) error {
 	return s.retry(ctx, func() error {
 		_, err := s.db.ExecContext(ctx, upsertCounter, name, delta)
@@ -165,6 +169,7 @@ func collapseBatch(metrics []models.Metrics) []models.Metrics {
 	return collapsed
 }
 
+// UpdateBatch применяет батч метрик в одной транзакции.
 func (s *PGStorage) UpdateBatch(ctx context.Context, metrics []models.Metrics) error {
 	batch := collapseBatch(metrics)
 	return s.retry(ctx, func() error { return s.updateBatch(ctx, batch) })
@@ -226,6 +231,7 @@ func (s *PGStorage) updateBatch(ctx context.Context, batch []models.Metrics) err
 	return tx.Commit()
 }
 
+// Gauge возвращает значение gauge или ErrNotFound.
 func (s *PGStorage) Gauge(ctx context.Context, name string) (float64, error) {
 	var value sql.NullFloat64
 
@@ -243,6 +249,7 @@ func (s *PGStorage) Gauge(ctx context.Context, name string) (float64, error) {
 	return value.Float64, nil
 }
 
+// Counter возвращает значение counter или ErrNotFound.
 func (s *PGStorage) Counter(ctx context.Context, name string) (int64, error) {
 	var delta sql.NullInt64
 
@@ -260,6 +267,7 @@ func (s *PGStorage) Counter(ctx context.Context, name string) (int64, error) {
 	return delta.Int64, nil
 }
 
+// Snapshot возвращает копии всех gauge и counter.
 func (s *PGStorage) Snapshot(ctx context.Context) (map[string]float64, map[string]int64, error) {
 	gauges := make(map[string]float64)
 	counters := make(map[string]int64)

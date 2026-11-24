@@ -1,6 +1,7 @@
 package hash
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -15,6 +16,14 @@ func TestSign(t *testing.T) {
 	assert.Equal(t, signature, Sign(body, "ключ"), "подпись должна быть повторяемой")
 	assert.NotEqual(t, signature, Sign(body, "другой"), "разные ключи дают разные подписи")
 	assert.NotEqual(t, signature, Sign([]byte("другое тело"), "ключ"))
+}
+
+func BenchmarkSign(b *testing.B) {
+	body := []byte(strings.Repeat(`{"id":"HeapAlloc","type":"gauge","value":1234.5678},`, 35))
+
+	for b.Loop() {
+		Sign(body, "ключ")
+	}
 }
 
 func TestValid(t *testing.T) {

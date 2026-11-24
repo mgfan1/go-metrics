@@ -5,14 +5,16 @@ import (
 	"fmt"
 )
 
+// Agent хранит настройки агента.
 type Agent struct {
-	Addr           string
-	ReportInterval int
-	PollInterval   int
-	Key            string
-	RateLimit      int
+	Addr           string // адрес сервера метрик
+	ReportInterval int    // период отправки в секундах
+	PollInterval   int    // период опроса в секундах
+	Key            string // ключ подписи отправляемых данных
+	RateLimit      int    // предел одновременных запросов к серверу
 }
 
+// ParseAgent читает настройки агента и проверяет, что периоды больше нуля.
 func ParseAgent() (Agent, error) {
 	var cfg Agent
 

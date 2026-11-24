@@ -29,7 +29,7 @@ func TestPing(t *testing.T) {
 			db := mocks.NewPinger(t)
 			db.On("PingContext", mock.Anything).Return(c.err)
 
-			h := New(storage.NewMemStorage(), db, zap.NewNop())
+			h := New(storage.NewMemStorage(), db, nil, zap.NewNop())
 
 			w := httptest.NewRecorder()
 			h.Ping(w, httptest.NewRequest(http.MethodGet, "/ping", nil))
@@ -39,7 +39,7 @@ func TestPing(t *testing.T) {
 	}
 
 	t.Run("база не настроена", func(t *testing.T) {
-		h := New(storage.NewMemStorage(), nil, zap.NewNop())
+		h := New(storage.NewMemStorage(), nil, nil, zap.NewNop())
 
 		w := httptest.NewRecorder()
 		h.Ping(w, httptest.NewRequest(http.MethodGet, "/ping", nil))
@@ -52,7 +52,7 @@ func TestPingRoute(t *testing.T) {
 	db := mocks.NewPinger(t)
 	db.On("PingContext", mock.Anything).Return(nil)
 
-	h := New(storage.NewMemStorage(), db, zap.NewNop())
+	h := New(storage.NewMemStorage(), db, nil, zap.NewNop())
 	ts := httptest.NewServer(h.Router(zap.NewNop(), ""))
 	defer ts.Close()
 

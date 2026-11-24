@@ -1,0 +1,24 @@
+name: format
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  gofmt:
+    runs-on: ubuntu-latest
+    container: golang:1.27
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Check gofmt
+        run: |
+          unformatted=$(gofmt -s -l .)
+          if [ -n "$unformatted" ]; then
+            echo "Не прошли gofmt -s:"
+            echo "$unformatted"
+            exit 1
+          fi

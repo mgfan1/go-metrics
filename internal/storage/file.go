@@ -14,6 +14,7 @@ import (
 	models "github.com/mgfan1/go-metrics/internal/model"
 )
 
+// FileStore сохраняет метрики хранилища в JSON-файл и восстанавливает их при старте.
 type FileStore struct {
 	mu   sync.Mutex
 	repo Repository
@@ -21,6 +22,7 @@ type FileStore struct {
 	log  *zap.Logger
 }
 
+// NewFileStore создаёт FileStore поверх repo и при restore загружает метрики из path.
 func NewFileStore(repo Repository, path string, restore bool, log *zap.Logger) (*FileStore, error) {
 	f := &FileStore{repo: repo, path: path, log: log}
 	if !restore {
@@ -110,10 +112,12 @@ func (f *FileStore) save(ctx context.Context) error {
 	return os.Rename(tmp, f.path)
 }
 
+// Close сохраняет метрики в файл.
 func (f *FileStore) Close() error {
 	return f.save(context.Background())
 }
 
+// RunPeriodic сохраняет метрики каждые interval, пока не отменён ctx.
 func (f *FileStore) RunPeriodic(ctx context.Context, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -136,6 +140,7 @@ type syncRepository struct {
 	log  *zap.Logger
 }
 
+// SyncRepository возвращает хранилище, которое пишет файл после каждого изменения.
 func (f *FileStore) SyncRepository() Repository {
 	return &syncRepository{Repository: f.repo, file: f, log: f.log}
 }

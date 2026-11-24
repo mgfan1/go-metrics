@@ -4,31 +4,46 @@ import (
 	"context"
 	"errors"
 	"html/template"
+	"net"
 	"net/http"
 	"sort"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"go.uber.org/zap"
 
+	"github.com/mgfan1/go-metrics/internal/audit"
 	models "github.com/mgfan1/go-metrics/internal/model"
 	"github.com/mgfan1/go-metrics/internal/storage"
 )
 
+// Pinger проверяет соединение с базой данных.
 type Pinger interface {
+	// PingContext возвращает ошибку, если база не отвечает.
 	PingContext(ctx context.Context) error
 }
 
+// Auditor принимает события аудита полученных метрик.
+type Auditor interface {
+	// Publish передаёт событие на аудит без ожидания доставки.
+	Publish(e audit.Event)
+}
+
+// MetricsHandler обслуживает HTTP API метрик.
 type MetricsHandler struct {
-	store storage.Repository
-	db    Pinger
-	log   *zap.Logger
+	store   storage.Repository
+	db      Pinger
+	auditor Auditor
+	log     *zap.Logger
 }
 
-func New(store storage.Repository, db Pinger, log *zap.Logger) *MetricsHandler {
-	return &MetricsHandler{store: store, db: db, log: log}
+// New создаёт MetricsHandler поверх store, без db /ping всегда отвечает 200, без auditor аудит выключен.
+func New(store storage.Repository, db Pinger, auditor Auditor, log *zap.Logger) *MetricsHandler {
+	return &MetricsHandler{store: store, db: db, auditor: auditor, log: log}
 }
 
+// Update обрабатывает POST /update/{type}/{name}/{value}: сохраняет gauge или прибавляет значение к counter.
 func (h *MetricsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	if name == "" {
@@ -63,10 +78,13 @@ func (h *MetricsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.audit(r, models.Metrics{ID: name})
+
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 }
 
+// Value обрабатывает GET /value/{type}/{name} и отдаёт значение метрики текстом.
 func (h *MetricsHandler) Value(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -105,6 +123,31 @@ func (h *MetricsHandler) readFailed(w http.ResponseWriter, r *http.Request, err 
 	http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 }
 
+func (h *MetricsHandler) audit(r *http.Request, metrics ...models.Metrics) {
+	if h.auditor == nil || len(metrics) == 0 {
+		return
+	}
+
+	names := make([]string, len(metrics))
+	for i, m := range metrics {
+		names[i] = m.ID
+	}
+
+	h.auditor.Publish(audit.Event{
+		TS:        time.Now().Unix(),
+		Metrics:   names,
+		IPAddress: clientIP(r),
+	})
+}
+
+func clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
 type metricRow struct {
 	Name  string
 	Value string
@@ -121,6 +164,7 @@ var listPage = template.Must(template.New("list").Parse(
 </body>
 </html>`))
 
+// List обрабатывает GET / и отдаёт HTML-страницу со всеми метриками.
 func (h *MetricsHandler) List(w http.ResponseWriter, r *http.Request) {
 	gauges, counters, err := h.store.Snapshot(r.Context())
 	if err != nil {

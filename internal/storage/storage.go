@@ -8,23 +8,33 @@ import (
 	models "github.com/mgfan1/go-metrics/internal/model"
 )
 
+// ErrNotFound означает, что метрики с таким именем нет.
 var ErrNotFound = errors.New("метрика не найдена")
 
+// Repository описывает хранилище метрик.
 type Repository interface {
+	// UpdateGauge сохраняет значение gauge.
 	UpdateGauge(ctx context.Context, name string, value float64) error
+	// AddCounter прибавляет delta к counter.
 	AddCounter(ctx context.Context, name string, delta int64) error
+	// UpdateBatch применяет батч метрик целиком.
 	UpdateBatch(ctx context.Context, metrics []models.Metrics) error
+	// Gauge возвращает значение gauge или ErrNotFound.
 	Gauge(ctx context.Context, name string) (float64, error)
+	// Counter возвращает значение counter или ErrNotFound.
 	Counter(ctx context.Context, name string) (int64, error)
+	// Snapshot возвращает копии всех gauge и counter.
 	Snapshot(ctx context.Context) (gauges map[string]float64, counters map[string]int64, err error)
 }
 
+// MemStorage хранит метрики в памяти и безопасен для конкурентного доступа.
 type MemStorage struct {
 	mu       sync.RWMutex
 	gauges   map[string]float64
 	counters map[string]int64
 }
 
+// NewMemStorage создаёт пустое хранилище.
 func NewMemStorage() *MemStorage {
 	return &MemStorage{
 		gauges:   make(map[string]float64),
@@ -32,6 +42,7 @@ func NewMemStorage() *MemStorage {
 	}
 }
 
+// UpdateGauge сохраняет значение gauge.
 func (s *MemStorage) UpdateGauge(_ context.Context, name string, value float64) error {
 	s.mu.Lock()
 	s.gauges[name] = value
@@ -39,6 +50,7 @@ func (s *MemStorage) UpdateGauge(_ context.Context, name string, value float64) 
 	return nil
 }
 
+// AddCounter прибавляет delta к counter.
 func (s *MemStorage) AddCounter(_ context.Context, name string, delta int64) error {
 	s.mu.Lock()
 	s.counters[name] += delta
@@ -46,6 +58,7 @@ func (s *MemStorage) AddCounter(_ context.Context, name string, delta int64) err
 	return nil
 }
 
+// UpdateBatch применяет батч метрик целиком.
 func (s *MemStorage) UpdateBatch(_ context.Context, metrics []models.Metrics) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -66,6 +79,7 @@ func (s *MemStorage) UpdateBatch(_ context.Context, metrics []models.Metrics) er
 	return nil
 }
 
+// Gauge возвращает значение gauge или ErrNotFound.
 func (s *MemStorage) Gauge(_ context.Context, name string) (float64, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -77,6 +91,7 @@ func (s *MemStorage) Gauge(_ context.Context, name string) (float64, error) {
 	return v, nil
 }
 
+// Counter возвращает значение counter или ErrNotFound.
 func (s *MemStorage) Counter(_ context.Context, name string) (int64, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -88,6 +103,7 @@ func (s *MemStorage) Counter(_ context.Context, name string) (int64, error) {
 	return v, nil
 }
 
+// Snapshot возвращает копии всех gauge и counter.
 func (s *MemStorage) Snapshot(_ context.Context) (map[string]float64, map[string]int64, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

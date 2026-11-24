@@ -16,14 +16,14 @@ func rawClient() *http.Client {
 	return &http.Client{Transport: &http.Transport{DisableCompression: true}}
 }
 
-func gzipBody(t *testing.T, body string) *bytes.Buffer {
-	t.Helper()
+func gzipBody(tb testing.TB, body string) *bytes.Buffer {
+	tb.Helper()
 
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	_, err := gz.Write([]byte(body))
-	require.NoError(t, err)
-	require.NoError(t, gz.Close())
+	require.NoError(tb, err)
+	require.NoError(tb, gz.Close())
 	return &buf
 }
 
