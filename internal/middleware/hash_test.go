@@ -153,6 +153,26 @@ func TestHashWriterReset(t *testing.T) {
 	assert.Zero(t, hw.buf.Len())
 }
 
+func TestHashSignNextResponseStartsClean(t *testing.T) {
+	sign := HashSign("ключ")
+
+	first := httptest.NewRecorder()
+	sign(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte("первый ответ"))
+	})).ServeHTTP(first, httptest.NewRequest(http.MethodGet, "/value/gauge/Alloc", nil))
+
+	second := httptest.NewRecorder()
+	sign(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("второй"))
+	})).ServeHTTP(second, httptest.NewRequest(http.MethodGet, "/value/gauge/Alloc", nil))
+
+	assert.Equal(t, http.StatusNotFound, first.Code)
+	assert.Equal(t, http.StatusOK, second.Code, "статус прошлого ответа не должен переходить в следующий")
+	assert.Equal(t, "второй", second.Body.String())
+	assert.Equal(t, hash.Sign([]byte("второй"), "ключ"), second.Header().Get(hash.Header))
+}
+
 func TestHashChainBlocksFlush(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/updates/", strings.NewReader(body))
 	req.Header.Set("Accept-Encoding", "gzip")
