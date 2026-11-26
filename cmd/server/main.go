@@ -14,13 +14,22 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/mgfan1/go-metrics/internal/audit"
+	"github.com/mgfan1/go-metrics/internal/buildinfo"
 	"github.com/mgfan1/go-metrics/internal/config"
 	"github.com/mgfan1/go-metrics/internal/handler"
 	"github.com/mgfan1/go-metrics/internal/server"
 	"github.com/mgfan1/go-metrics/internal/storage"
 )
 
+var (
+	buildVersion string
+	buildDate    string
+	buildCommit  string
+)
+
 func main() {
+	buildinfo.Print(os.Stdout, buildVersion, buildDate, buildCommit)
+
 	logger, err := zap.NewProduction()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

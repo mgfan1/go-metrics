@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"bytes"
 	"compress/gzip"
 	"io"
 	"net/http"
@@ -139,6 +140,37 @@ func TestHashKeepsFirstStatus(t *testing.T) {
 	})).ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+func TestHashWriterReset(t *testing.T) {
+	hw := &hashWriter{ResponseWriter: httptest.NewRecorder(), buf: bytes.NewBufferString("тело"), status: http.StatusNotFound}
+
+	hw.Reset()
+
+	assert.Nil(t, hw.ResponseWriter)
+	assert.Zero(t, hw.status)
+	require.NotNil(t, hw.buf)
+	assert.Zero(t, hw.buf.Len())
+}
+
+func TestHashSignNextResponseStartsClean(t *testing.T) {
+	sign := HashSign("ключ")
+
+	first := httptest.NewRecorder()
+	sign(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte("первый ответ"))
+	})).ServeHTTP(first, httptest.NewRequest(http.MethodGet, "/value/gauge/Alloc", nil))
+
+	second := httptest.NewRecorder()
+	sign(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("второй"))
+	})).ServeHTTP(second, httptest.NewRequest(http.MethodGet, "/value/gauge/Alloc", nil))
+
+	assert.Equal(t, http.StatusNotFound, first.Code)
+	assert.Equal(t, http.StatusOK, second.Code, "статус прошлого ответа не должен переходить в следующий")
+	assert.Equal(t, "второй", second.Body.String())
+	assert.Equal(t, hash.Sign([]byte("второй"), "ключ"), second.Header().Get(hash.Header))
 }
 
 func TestHashChainBlocksFlush(t *testing.T) {

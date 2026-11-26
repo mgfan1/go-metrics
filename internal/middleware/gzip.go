@@ -6,28 +6,25 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"sync"
 
 	"github.com/mgfan1/go-metrics/internal/compress"
+	"github.com/mgfan1/go-metrics/internal/pool"
 )
 
-var gzipReaders = sync.Pool{
-	New: func() any { return &gzipReader{buf: bufio.NewReader(nil)} },
-}
+var gzipReaders = pool.New(func() *gzipReader { return &gzipReader{buf: bufio.NewReader(nil)} })
 
 type gzipReader struct {
 	buf *bufio.Reader
 	zr  gzip.Reader
 }
 
-func (g *gzipReader) reset(r io.Reader) error {
+func (g *gzipReader) open(r io.Reader) error {
 	g.buf.Reset(r)
 	return g.zr.Reset(g.buf)
 }
 
-func (g *gzipReader) release() {
+func (g *gzipReader) Reset() {
 	g.buf.Reset(nil)
-	gzipReaders.Put(g)
 }
 
 type gzipWriter struct {
@@ -79,10 +76,10 @@ func compressible(contentType string) bool {
 func Gzip(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.Header.Get("Content-Encoding"), "gzip") {
-			gr := gzipReaders.Get().(*gzipReader)
-			defer gr.release()
+			gr := gzipReaders.Get()
+			defer gzipReaders.Put(gr)
 
-			if err := gr.reset(r.Body); err != nil {
+			if err := gr.open(r.Body); err != nil {
 				http.Error(w, "не удалось распаковать тело запроса", http.StatusBadRequest)
 				return
 			}

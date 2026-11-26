@@ -4,32 +4,35 @@ import (
 	"bytes"
 	"io"
 	"net/http"
-	"sync"
 
 	"go.uber.org/zap"
 
 	"github.com/mgfan1/go-metrics/internal/hash"
+	"github.com/mgfan1/go-metrics/internal/pool"
 )
+
+//go:generate go run github.com/mgfan1/go-metrics/cmd/reset .
 
 const maxPooledBuffer = 64 << 10
 
-var buffers = sync.Pool{
-	New: func() any { return new(bytes.Buffer) },
-}
-
-func getBuffer() *bytes.Buffer {
-	buf := buffers.Get().(*bytes.Buffer)
-	buf.Reset()
-	return buf
-}
+var (
+	buffers     = pool.New(func() *bytes.Buffer { return new(bytes.Buffer) })
+	hashWriters = pool.New(func() *hashWriter { return &hashWriter{buf: new(bytes.Buffer)} })
+)
 
 func putBuffer(buf *bytes.Buffer) {
-	if buf.Cap() > maxPooledBuffer {
-		return
+	if buf.Cap() <= maxPooledBuffer {
+		buffers.Put(buf)
 	}
-	buffers.Put(buf)
 }
 
+func putWriter(hw *hashWriter) {
+	if hw.buf.Cap() <= maxPooledBuffer {
+		hashWriters.Put(hw)
+	}
+}
+
+// generate:reset
 type hashWriter struct {
 	http.ResponseWriter
 	buf    *bytes.Buffer
@@ -66,10 +69,9 @@ func HashSign(key string) func(http.Handler) http.Handler {
 		}
 
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			buf := getBuffer()
-			defer putBuffer(buf)
-
-			hw := &hashWriter{ResponseWriter: w, buf: buf}
+			hw := hashWriters.Get()
+			hw.ResponseWriter = w
+			defer putWriter(hw)
 			defer hw.flush(key)
 
 			next.ServeHTTP(hw, r)
@@ -91,7 +93,7 @@ func HashCheck(key string, log *zap.Logger) func(http.Handler) http.Handler {
 				return
 			}
 
-			buf := getBuffer()
+			buf := buffers.Get()
 			defer putBuffer(buf)
 
 			if _, err := buf.ReadFrom(r.Body); err != nil {

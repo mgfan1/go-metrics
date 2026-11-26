@@ -43,6 +43,15 @@ git fetch template && git checkout template/v2 .github
 - **Hexagonal Architecture**
 - **Layered Architecture**
 
+## Сборка
+
+При старте сервер и агент печатают версию, дату и коммит сборки. Значения задаются флагами линковщика, без них выводится `N/A`. Команды для bash (Linux, macOS, Git Bash):
+
+```
+go build -ldflags "-X main.buildVersion=v1.0.0 -X 'main.buildDate=$(date +'%Y-%m-%d %H:%M:%S')' -X main.buildCommit=$(git rev-parse --short HEAD)" -o cmd/server/server ./cmd/server
+go build -ldflags "-X main.buildVersion=v1.0.0 -X 'main.buildDate=$(date +'%Y-%m-%d %H:%M:%S')' -X main.buildCommit=$(git rev-parse --short HEAD)" -o cmd/agent/agent ./cmd/agent
+```
+
 ## Запуск
 
 ```
@@ -74,6 +83,48 @@ go run ./cmd/agent -a localhost:8080 -p 2 -r 10
 | `-r` | `REPORT_INTERVAL` | `10` | период отправки в секундах |
 | `-k` | `KEY` | не задано | ключ подписи отправляемых данных |
 | `-l` | `RATE_LIMIT` | `1` | число одновременных запросов к серверу |
+
+## Статический анализ
+
+Линтер `cmd/linter` запускает анализатор `exitcheck`. Он сообщает о любом вызове `panic`, а также о вызовах `os.Exit` и `Fatal`, `Fatalf`, `Fatalln` из пакета `log` вне функции `main` пакета `main`. Методы `*log.Logger` с теми же именами тоже считаются. Сгенерированные файлы, например моки mockery, не проверяются.
+
+```
+go run ./cmd/linter ./...
+```
+
+Его также можно подключить к `go vet`, в CI (workflow `linter.yml`) он работает через `-vettool`:
+
+```
+go install ./cmd/linter
+go vet -vettool="$(go env GOPATH)/bin/linter" ./...
+```
+
+## Генерация методов Reset
+
+Генератор `cmd/reset` проходит по пакетам начиная с указанного каталога, по умолчанию текущего. Для каждой структуры с комментарием `// generate:reset` он пишет метод `Reset()` в файл `reset.gen.go` того же пакета.
+
+```
+go run ./cmd/reset
+```
+
+`go generate ./...` перегенерирует только пакеты с директивой `//go:generate go run github.com/mgfan1/go-metrics/cmd/reset .`, сейчас это `internal/middleware`.
+
+| Поле | Как сбрасывается |
+|---|---|
+| число, строка, bool | нулевое значение |
+| слайс | `s = s[:0]`, ёмкость остаётся |
+| мапа | `clear(m)` |
+| тип со своим методом `Reset()` | вызов `Reset()`, помеченные структуры считаются такими ещё до генерации |
+| указатель на число, строку, слайс, мапу, указатель или тип с `Reset()` | если не `nil`, значение сбрасывается по тем же правилам |
+| указатель на другое, например на структуру без `Reset()` | `nil`, общий объект вроде `*log.Logger` не затирается |
+| структура без `Reset()`, массив | `T{}` |
+| интерфейс, канал, функция | `nil` |
+
+Эталоны тестов генератора обновляются командой `go test ./cmd/reset -update`.
+
+## Пул объектов
+
+`internal/pool` даёт типизированный пул поверх `sync.Pool` для типов с методом `Reset()`: `pool.New(newFn)`, `Get()` и `Put(x)`. `Put` сбрасывает объект перед возвратом в пул, поэтому `Get` отдаёт чистый объект. Через пул переиспользуются обёртка ответа `hashWriter` с её буфером, буферы проверки подписи и распаковщики gzip в middleware. Метод `Reset()` для `hashWriter` сгенерирован `cmd/reset`. Компрессоры `gzip.Writer` в `internal/compress` остались на `sync.Pool`: их `Reset` принимает `io.Writer` и под ограничение `Resetter` не подходит.
 
 ## Профилирование памяти
 
